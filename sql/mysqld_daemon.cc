@@ -54,8 +54,10 @@ bool mysqld::runtime::is_daemon() { return is_daemon_proc; }
 
 int mysqld::runtime::mysqld_daemonize() {
   int pipe_fd[2];
+  // pipe 创建管道，父子进程通信。https://blog.csdn.net/qq_42914528/article/details/82023408
   if (pipe(pipe_fd) < 0) return -2;
 
+  // fork 创建子进程。https://www.cnblogs.com/dongguolei/p/8086346.html
   pid_t pid = fork();
   if (pid == -1) {
     // Error

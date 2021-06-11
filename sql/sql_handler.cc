@@ -917,6 +917,7 @@ void mysql_ha_flush(THD *thd) {
     system tables. The main MDL context is backed up and we can't
     properly release HANDLER locks stored there.
   */
+  // 处理系统表的时候会进行backup，我们无法操作那些锁，所以不flush
   if (thd->state_flags & Open_tables_state::BACKUPS_AVAIL) return;
 
   for (const auto &key_and_value : thd->handler_tables_hash) {

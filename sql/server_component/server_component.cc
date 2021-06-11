@@ -535,6 +535,7 @@ bool initialize_minimal_chassis(SERVICE_TYPE_NO_CONST(registry) * *registry) {
       const_cast<SERVICE_TYPE_NO_CONST(registry) *>(mysql_service_registry);
 #else
   /* Normal server code path. Hence we need to initialize minimal chassis */
+  // 最小的基础架子初始化，注册一些服务实例
   if (minimal_chassis_init(registry, &COMPONENT_REF(mysql_server))) {
     return true;
   }

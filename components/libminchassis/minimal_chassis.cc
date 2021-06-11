@@ -150,10 +150,12 @@ bool minimal_chassis_init(SERVICE_TYPE_NO_CONST(registry) * *registry,
   mysql_service_mysql_psi_system_v1 =
       &imp_mysql_minimal_chassis_mysql_psi_system_v1;
   /* Create the registry service suite internal structure mysql_registry. */
+  // 创建registry服务套件内部的mysql_registry。只初始化了其中的rw锁。
   mysql_registry_imp::init();
 
   /* Seed the registry through registering the registry implementation into it,
     as well as other main bootstrap dynamic loader service implementations. */
+  // 将registry的实例注册进去，以便后面其他的bootstrap动态加载这些实例
   for (int inx = 0;
        mysql_component_mysql_minimal_chassis.provides[inx].implementation !=
        NULL;
@@ -169,6 +171,7 @@ bool minimal_chassis_init(SERVICE_TYPE_NO_CONST(registry) * *registry,
 
   if (registry != NULL) {
     my_h_service registry_handle;
+    // 从注册的实例中取出registry实例。
     if (imp_mysql_minimal_chassis_registry.acquire("registry",
                                                    &registry_handle)) {
       return true;
@@ -177,7 +180,9 @@ bool minimal_chassis_init(SERVICE_TYPE_NO_CONST(registry) * *registry,
         reinterpret_cast<SERVICE_TYPE_NO_CONST(registry) *>(registry_handle);
   }
 
+  // 创建动态加载器，也只是初始化了rw锁
   mysql_dynamic_loader_imp::init();
+  // 从注册实例中取出mysql_runtime_error实例，动态加载器需要使用
   imp_mysql_minimal_chassis_registry.acquire("mysql_runtime_error",
                                              &h_err_service);
   /* This service variable is used in the dynamic loader error calls.
@@ -188,8 +193,10 @@ bool minimal_chassis_init(SERVICE_TYPE_NO_CONST(registry) * *registry,
   mysql_service_mysql_runtime_error =
       reinterpret_cast<SERVICE_TYPE(mysql_runtime_error) *>(h_err_service);
 
+  // 创建动态加载器scheme，主要是file://结构，也只初始化了rw锁
   mysql_dynamic_loader_scheme_file_imp::init();
 
+  // 将传入的组件实例注册进去
   if (comp_ref != NULL) {
     for (int inx = 0; comp_ref->provides[inx].implementation != NULL; ++inx) {
       if (imp_mysql_minimal_chassis_registry_registration.register_service(

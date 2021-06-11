@@ -303,6 +303,7 @@ bool Resource_group_mgr::post_init() {
   thd->variables.transaction_read_only = false;
   thd->tx_read_only = false;
 
+  // 主要逻辑deserialize_resource_groups，异步去读取磁盘数据反序列化
   bool res = deserialize_resource_groups(thd.get());
 
   return res;
@@ -316,6 +317,7 @@ bool Resource_group_mgr::init() {
   static_assert(0, "WITH_PERFSCHEMA_STORAGE_ENGINE not defined.");
 #endif
 
+  // 平台不支持的话，后面就不需要初始化了
   if (!platform::is_platform_supported()) {
     m_unsupport_reason = "Platform Unsupported";
     return false;
@@ -334,6 +336,7 @@ bool Resource_group_mgr::init() {
 
   m_thread_priority_available = platform::can_thread_priority_be_set();
 
+  // 获取registry
   m_registry_svc = mysql_plugin_registry_acquire();
   if (!m_registry_svc) {
     LogErr(WARNING_LEVEL,
@@ -341,6 +344,7 @@ bool Resource_group_mgr::init() {
     return true;
   }
 
+  // 获取resource_group service
   if (m_registry_svc->acquire("pfs_resource_group_v3", &m_h_res_grp_svc)) {
     LogErr(WARNING_LEVEL,
            ER_COMPONENTS_FAILED_TO_ACQUIRE_SERVICE_IMPLEMENTATION,
@@ -361,6 +365,7 @@ bool Resource_group_mgr::init() {
       m_h_notification_svc);
 
   // Register thread creation notification callbacks.
+  // 注册线程创建的提示回调
   PSI_notification callbacks;
   memset(&callbacks, 0, sizeof(callbacks));
   callbacks.thread_create = &thread_create_callback;
@@ -407,12 +412,14 @@ bool Resource_group_mgr::init() {
     return true;
   }
 
+  // 将前面创建的用户默认resource组和系统默认resource组都加入到 m_resource_group_hash中
   add_resource_group(
       std::unique_ptr<Resource_group>(m_usr_default_resource_group));
   add_resource_group(
       std::unique_ptr<Resource_group>(m_sys_default_resource_group));
 
   // Initialize number of VCPUs.
+  // 初始化虚拟机内cpu数量
   m_num_vcpus = platform::num_vcpus();
   return false;
 }

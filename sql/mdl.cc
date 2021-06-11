@@ -1513,6 +1513,7 @@ void MDL_request::init_with_source(MDL_key::enum_mdl_namespace mdl_namespace,
          my_isupper(system_charset_info, name_arg[0]));
 #endif
 
+  // 初始化一个三元组作为key
   key.mdl_key_init(mdl_namespace, db_arg, name_arg);
   type = mdl_type_arg;
   duration = mdl_duration_arg;
@@ -3602,6 +3603,8 @@ class MDL_request_cmp {
 /**
   Acquire exclusive locks. There must be no granted locks in the
   context.
+  获取排他锁，请求列表中必须没有已成功获取的锁。
+  这个函数时lock_table_names的替代，主要用于 RENAME, DROP 或其他 DDL操作。
 
   This is a replacement of lock_table_names(). It is used in
   RENAME, DROP and other DDL SQL statements.
@@ -3612,8 +3615,10 @@ class MDL_request_cmp {
 
   @note The list of requests should not contain non-exclusive lock requests.
         There should not be any acquired locks in the context.
+        列表中不能有非排他锁的请求，且不能有已获取到锁的请求
 
   @note Assumes that one already owns scoped intention exclusive lock.
+        假定已经获取了范围意向锁。
 
   @note If acquisition fails any locks with MDL_EXPLICIT duration that had
         already been taken, are released. Not just locks with MDL_STATEMENT
@@ -3640,6 +3645,7 @@ bool MDL_context::acquire_locks(MDL_request_list *mdl_requests,
   if (req_count == 0) return false;
 
   /* Sort requests according to MDL_key. */
+  // 分配空间存储mdl_requests
   Prealloced_array<MDL_request *, 16> sort_buf(
       key_memory_MDL_context_acquire_locks);
   if (sort_buf.reserve(req_count)) return true;
@@ -3648,9 +3654,11 @@ bool MDL_context::acquire_locks(MDL_request_list *mdl_requests,
     sort_buf.push_back(it++);
   }
 
+  // 按key排序
   std::sort(sort_buf.begin(), sort_buf.end(), MDL_request_cmp());
 
   size_t num_acquired = 0;
+  // 遍历获取锁
   for (p_req = sort_buf.begin(); p_req != sort_buf.end(); p_req++) {
     if (acquire_lock(*p_req, lock_wait_timeout)) goto err;
     ++num_acquired;
@@ -3658,6 +3666,7 @@ bool MDL_context::acquire_locks(MDL_request_list *mdl_requests,
   return false;
 
 err:
+    // 加锁失败回滚处理
   /*
     Release locks we have managed to acquire so far.
     Use rollback_to_savepoint() since there may be duplicate

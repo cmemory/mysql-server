@@ -2481,12 +2481,14 @@ static bool check_if_table_exists(THD *thd, TABLE_LIST *table, bool *exists) {
   assert(thd->mdl_context.owns_equal_or_stronger_lock(
       MDL_key::TABLE, table->db, table->table_name, MDL_SHARED));
 
+  // 检查dd中是否存在表
   if (dd::table_exists(thd->dd_client(), table->db, table->table_name, exists))
     return true;  // Error is already reported.
 
   if (*exists) goto end;
 
   /* Table doesn't exist. Check if some engine can provide it. */
+  // 检查存储引擎中是否存在表
   if (ha_check_if_table_exists(thd, table->db, table->table_name, exists)) {
     my_printf_error(ER_OUT_OF_RESOURCES,
                     "Failed to open '%-.64s', error while "
@@ -3082,12 +3084,14 @@ bool open_table(THD *thd, TABLE_LIST *table_list, Open_table_context *ot_ctx) {
       table_list->open_strategy == TABLE_LIST::OPEN_FOR_CREATE) {
     bool exists;
 
+    // 检查表是否存在
     if (check_if_table_exists(thd, table_list, &exists)) return true;
 
     /*
       If the table does not exist then upgrade the lock to the EXCLUSIVE MDL
       lock.
     */
+    // 如果表不存在，升级为独占锁
     if (!exists) {
       if (table_list->open_strategy == TABLE_LIST::OPEN_FOR_CREATE &&
           !(flags & (MYSQL_OPEN_FORCE_SHARED_MDL |
@@ -3604,6 +3608,7 @@ void assign_new_table_id(TABLE_SHARE *share) {
 /**
   Compare metadata versions of an element obtained from the table
   definition cache and its corresponding node in the parse tree.
+  对比 表定义缓存 和 解析树中通信节点 的表的metadata版本。
 
   @details If the new and the old values mismatch, invoke
   Metadata_version_observer.
@@ -3614,6 +3619,13 @@ void assign_new_table_id(TABLE_SHARE *share) {
   version.
   At prepared statement execute, an observer may be installed.  If
   there is a version mismatch, we push an error and return true.
+
+  如果新老值不匹配，调用Metadata_version_observer。
+  1、在预编译语句预处理阶段，所有的TABLE_LIST版本都是NULL，所以总是不匹配的。但是THD中没有设置observer，所以不会抛出error。
+  相反我们在parse tree中更新了这个值，有效的记录原始版本。
+  2、在预编译语句执行阶段，会设置一个observer，当出现version不匹配时，就会发出error。
+
+  对于传统的执行（没有预编译语句），将不会设置observer
 
   For conventional execution (no prepared statements), the
   observer is never installed.
@@ -3641,8 +3653,10 @@ static bool check_and_update_table_version(THD *thd, TABLE_LIST *tables,
       previous execution of the prepared statement, and it is
       unacceptable for this SQLCOM.
     */
+    // Version不一致，请求reprepare，如果之前已经处理过则抛错。
     if (ask_to_reprepare(thd)) return true;
     /* Always maintain the latest version and type */
+    // 需要reprepare，设置当前version id为最新版本。
     tables->set_table_ref_id(table_share);
   }
   return false;
@@ -4867,6 +4881,7 @@ static bool open_and_process_routine(
   Handle table list element by obtaining metadata lock, opening table or view
   and, if prelocking strategy prescribes so, extending the prelocking set with
   tables and routines used by it.
+  对于table list中的表，获取MDL锁，打开表或view，并按照预加锁策略指示，扩展预加锁集合（将tables或routines加入）。
 
   @param[in]     thd                  Thread context.
   @param[in]     lex                  LEX structure for statement.
@@ -4898,6 +4913,7 @@ static bool open_and_process_table(THD *thd, LEX *lex, TABLE_LIST *const tables,
     Ignore placeholders for unnamed derived tables, as they are fully resolved
     by the optimizer.
   */
+  // 对于未命名的派生表（子表）忽略占位符，因为它们会被优化器处理
   if (tables->is_derived() || tables->is_table_function() ||
       tables->is_recursive_reference())
     goto end;
@@ -4910,6 +4926,8 @@ static bool open_and_process_table(THD *thd, LEX *lex, TABLE_LIST *const tables,
     table in the query. Do not fill it yet - will be filled during
     execution.
   */
+  // 如果TABLE_LIST对象是系统information_schema表占位符，则创建一个临时表来代表查询中的表。
+  // 但现在不填入数据，在执行时才处理
   if (tables->schema_table) {
     /*
       Since we no longer set TABLE_LIST::schema_table/table for table
@@ -4918,8 +4936,12 @@ static bool open_and_process_table(THD *thd, LEX *lex, TABLE_LIST *const tables,
       at the same time. Otherwise, acquiring metadata lock om the view
       would have been necessary.
     */
+    // 因为我们不再对那些可合并的view设置为TABLE_LIST::schema_table/table。
+    // 所以我们不会同时遇到一个表既是information_schema table又是view的情况。
+    // 如果还是设置为table的话，我们就需要对view也获取MDL了
     assert(!tables->is_view());
 
+    // 创建information_schema表，并检查表元数据的version
     if (!mysql_schema_table(thd, lex, tables) &&
         !check_and_update_table_version(thd, tables, tables->table->s)) {
       goto end;
@@ -4930,17 +4952,20 @@ static bool open_and_process_table(THD *thd, LEX *lex, TABLE_LIST *const tables,
   DBUG_PRINT("tcache", ("opening table: '%s'.'%s'  item: %p", tables->db,
                         tables->table_name, tables));
 
+  // 计数加1
   (*counter)++;
 
   /*
     Not a placeholder so this must be a base/temporary table or view.
     Open it:
+    不是一个占位符，所以一定是一个基础/临时表或view，那就打开它
   */
 
   /*
     A TABLE_LIST object may have an associated open TABLE object
     (TABLE_LIST::table is not NULL) if it represents a pre-opened temporary
     table, or is a materialized view. (Derived tables are not handled here).
+    TABLE_LIST::table要么为空，要么已经关联到了一个已打开的临时表或实例化视图。
   */
 
   assert(tables->table == nullptr || is_temporary_table(tables) ||
@@ -4952,6 +4977,9 @@ static bool open_and_process_table(THD *thd, LEX *lex, TABLE_LIST *const tables,
     or to underlying table of merge table.
     So existing temporary table should have been preopened by this moment
     and we can simply continue without trying to open temporary or base table.
+    OT_TEMPORARY_ONLY 表示当前是CREATE TEMPORARY TABLE语句。
+    同时这种table list元素与预加锁的占位符或合并表的基础表是不一致的。
+    因此已存在的临时表应该之前已经打开了，我们只需要简单的继续下去，而不需要再打开临时表或基础表。
   */
   assert(tables->open_type != OT_TEMPORARY_ONLY ||
          (tables->open_strategy && !tables->prelocking_placeholder &&
@@ -4959,12 +4987,14 @@ static bool open_and_process_table(THD *thd, LEX *lex, TABLE_LIST *const tables,
 
   if (tables->open_type == OT_TEMPORARY_ONLY || is_temporary_table(tables)) {
     // Already "open", no action required
+    // 临时表已经打开了，不需要其他操作
   } else if (tables->prelocking_placeholder) {
     /*
       For the tables added by the pre-locking code, attempt to open
       the table but fail silently if the table does not exist.
       The real failure will occur when/if a statement attempts to use
       that table.
+      预加锁时添加的tables，尝试去打开。当表不存在时不显示的报error，只有在语句使用这个表的时候才产生真正错误。
     */
     No_such_table_error_handler no_such_table_handler;
     thd->push_internal_handler(&no_such_table_handler);
@@ -4991,9 +5021,15 @@ static bool open_and_process_table(THD *thd, LEX *lex, TABLE_LIST *const tables,
         attributes during EXECUTE is caught by THD::m_reprepare_observers).
         The problem is that since those attributes are not set in merge
         children, another round of PREPARE will not help.
+      打开预加锁添加的table列表。
+      由于table list元素可能在临时表预open后加入的，所以有可能还是临时表，这里再尝试打开temporary table。
+      我们不能简单的跳过这个元素，并延迟打开临时表，直到执行子语句时，主要有以下几点：
+      1、临时表可能是由多个基本表合并的MERGE表，所以基本表在预加锁阶段必须打开并锁住。
+      2、临时表可能是MERGE表
     */
     error = open_temporary_table(thd, tables);
 
+    // open table
     if (!error && !tables->table) error = open_table(thd, tables, ot_ctx);
 
     thd->pop_internal_handler();
@@ -5206,6 +5242,9 @@ static inline bool is_temporary_table_being_opened(const TABLE_LIST *table) {
 /**
   Acquire IX metadata locks on tablespace names used by LOCK
   TABLES or by a DDL statement.
+  对于表空间获取意向独占metadata锁，用于LOCK TABLES或DDL操作。
+  tablespace MDL锁获取要再获取表锁之后，所以推荐在整个服务中保持这种加锁顺序。
+  当我们调用acquire_locks加锁时，如果MDL requests中同时包含TABLE和TABLESPACE key，是很容易破坏这种加锁顺序，从而最终发生死锁。
 
   @note That the tablespace MDL locks are taken only after locks
   on tables are acquired. So it is recommended to maintain this
@@ -5235,10 +5274,14 @@ bool get_and_lock_tablespace_names(THD *thd, TABLE_LIST *tables_start,
   // do not lock.  We also skip this phase if we are within the
   // context of a FLUSH TABLE WITH READ LOCK or FLUSH TABLE FOR EXPORT
   // statement, indicated by the MYSQL_OPEN_SKIP_SCOPED_MDL_LOCK flag.
+  // 如果命令是DISCARD or IMPORT TABLESPACE（表空间传输），我们跳过这一步，
+  // 因为这些命令只能用于file-per-table tablespaces（独立表空间模式），这种不需要锁表空间。
+  // 另外如果我们处理flush table上下文（MYSQL_OPEN_SKIP_SCOPED_MDL_LOCK指定），则也跳过不需要锁表空间。
   if (flags & MYSQL_OPEN_SKIP_SCOPED_MDL_LOCK || thd_tablespace_op(thd))
     return false;
 
   // Add tablespace names used under partition/subpartition definitions.
+  // 根据表的分区定义，将tablespace names加入集合中。
   Tablespace_hash_set tablespace_set(PSI_INSTRUMENT_ME);
   if ((thd->lex->sql_command == SQLCOM_CREATE_TABLE ||
        thd->lex->sql_command == SQLCOM_ALTER_TABLE) &&
@@ -5248,9 +5291,11 @@ bool get_and_lock_tablespace_names(THD *thd, TABLE_LIST *tables_start,
   // The first step is to loop over the tables, make sure we have
   // locked the names, and then get hold of the tablespace names from
   // the data dictionary.
+  // 首先遍历表进行处理，确保我们锁住了表，进而从dd中获取表空间的锁。
   TABLE_LIST *table;
   for (table = tables_start; table && table != tables_end;
        table = table->next_global) {
+      // 仅考虑非临时表。
     // Consider only non-temporary tables. The if clauses below have the
     // following meaning:
     //
@@ -5259,11 +5304,15 @@ bool get_and_lock_tablespace_names(THD *thd, TABLE_LIST *tables_start,
     //                                         be altered, created or dropped,
     //                                         so no need to IX lock the
     //                                         tablespace.
+    // 不是LOCK TABLE ... READ语句，因为这个语句执行，表不能被altered, created or dropped。不需要表空间的IX锁。
+
     // is_ddl_or...request() || ...FOR_CREATE  Request for a strong DDL or
     //                                         LOCK TABLES type lock, or a
     //                                         table to be created.
-    // !OT_TEMPORARY_ONLY                      Not a user defined tmp table.
-    // !(OT_TEMPORARY_OR_BASE && is_temp...()) Not a pre-opened tmp table.
+    // 请求一个strong DDL或LOCK TABLES类型锁，或create表。
+
+    // !OT_TEMPORARY_ONLY                      Not a user defined tmp table. 不是用户定义的临时表
+    // !(OT_TEMPORARY_OR_BASE && is_temp...()) Not a pre-opened tmp table. 不是预打开的临时表
     if (table->mdl_request.type != MDL_SHARED_READ_ONLY &&
         (table->mdl_request.is_ddl_or_lock_tables_lock_request() ||
          table->open_strategy == TABLE_LIST::OPEN_FOR_CREATE) &&
@@ -5280,15 +5329,23 @@ bool get_and_lock_tablespace_names(THD *thd, TABLE_LIST *tables_start,
       //    along with tablespace names used by partitions. (e.g.
       //    ALTER TABLE t TABLESPACE s2, where t is defined in
       //    some tablespace s)
+      // 有三种基本情形：
+      // 1、只锁住目标表空间name，以及分区中使用的表空间names。如CREATE TABLE明确指定表空间name
+      // 2、只锁住表所在的表空间name（s），以及分区中使用的表空间names。如ALTER TABLE t ADD COLUMN，当t定义在表空间s中时。
+      // 3、锁住前面两者，以及分区中对应表空间。如ALTER TABLE t TABLESPACE s2，当t定义在表空间s中时，s、s2都会加锁。
+
+      // 前面将分区的tablespace_name加入set，这里加入target_tablespace_name
       if (table->target_tablespace_name.length > 0) {
         tablespace_set.insert(table->target_tablespace_name.str);
       }
 
       // No need to try this for tables to be created since they are not
       // yet present in the dictionary.
+      // OPEN_FOR_CREATE时，DD中都没有数据，所以不用去查。
       if (table->open_strategy != TABLE_LIST::OPEN_FOR_CREATE) {
         // Assert that we have an MDL lock on the table name. Needed to read
         // the dictionary safely.
+        // 去DD中读数据需要获取MDL锁，这里做下检查
         assert(thd->mdl_context.owns_equal_or_stronger_lock(
             MDL_key::TABLE, table->db, table->table_name, MDL_SHARED));
 
@@ -5297,6 +5354,9 @@ bool get_and_lock_tablespace_names(THD *thd, TABLE_LIST *tables_start,
           partitions/subpartitions. Lookup data dictionary to get
           the information.
         */
+        // 根据table_name获取所有相关的tablespace，并将name加入到tablespace_set
+        // 这里包括table_name对应的表、索引、individual columnns所在的tablespace。
+        //      还有这个表的分区、子分区对象及索引所在的tablespace。
         if (dd::fill_table_and_parts_tablespace_names(
                 thd, table->db, table->table_name, &tablespace_set))
           return true;
@@ -5308,6 +5368,7 @@ bool get_and_lock_tablespace_names(THD *thd, TABLE_LIST *tables_start,
     After we have identified the tablespace names, we iterate
     over the names and acquire IX locks on each of them.
   */
+  // 在确定了涉及的表空间names时，迭代遍历，获取对应的意向排他锁IX。
   if (lock_tablespace_names(thd, &tablespace_set, lock_wait_timeout))
     return true;
 
@@ -5317,6 +5378,9 @@ bool get_and_lock_tablespace_names(THD *thd, TABLE_LIST *tables_start,
 /**
   Acquire "strong" (SRO, SNW, SNRW) metadata locks on tables used by
   LOCK TABLES or by a DDL statement.
+  在LOCK TABLES或DDL语句时调用，请求更强的metadata锁，
+  在CREATE TABLE语句时调用，请求S共享锁
+  在LOCK TABLES状态下，不能获取到新锁，要使用open_tables_check_upgradable_mdl处理。
 
   Acquire lock "S" on table being created in CREATE TABLE statement.
 
@@ -5335,6 +5399,7 @@ bool get_and_lock_tablespace_names(THD *thd, TABLE_LIST *tables_start,
                            locks to be stored. It is guaranteed that
                            each schema will be present in this array
                            only once.
+                           非空时，指向需要获取schema locks的MDL requests列表，它保证每个schema在这个列表中只出现一次。
 
   @retval false  Success.
   @retval true   Failure (e.g. connection was killed)
@@ -5356,6 +5421,10 @@ bool lock_table_names(THD *thd, TABLE_LIST *tables_start,
     This function is not supposed to be used under LOCK TABLES normally.
     Instead open_tables_check_upgradable_mdl() or some other function
     checking if we have tables locked in proper mode should be used.
+    这个函数不应在已有LOCK TABLES时调用。
+    已有LOCK TABLES时，应该使用open_tables_check_upgradable_mdl或其他函数来check是否在正确的锁模式下。
+
+    RENAME TABLES是一个例外，会调用这个函数升级metadate锁并对目标table获取独占锁。检查之后这些表都处理合适的锁下。
 
     The exception to this rule is RENAME TABLES code which uses this call
     to "upgrade" metadata lock on tables renamed along with acquiring
@@ -5367,16 +5436,22 @@ bool lock_table_names(THD *thd, TABLE_LIST *tables_start,
 
   // Phase 1: Iterate over tables, collect set of unique schema names, and
   //          construct a list of requests for table MDL locks.
+  // 第一步：迭代tables，去重获取需要加锁的schema names集合，构建表的MDL locks列表。
   for (table = tables_start; table && table != tables_end;
        table = table->next_global) {
+      // 临时表跳过
     if (is_temporary_table_being_opened(table)) {
       continue;
     }
 
+    // 当不是lock tables和ddl操作且不是creat请求，跳过
     if (!table->mdl_request.is_ddl_or_lock_tables_lock_request() &&
         table->open_strategy != TABLE_LIST::OPEN_FOR_CREATE) {
       continue;
     } else {
+        // 对于lock tables或ddl，因为无法在MDL api层来决定是否需要获取锁，
+        // 所以在处理LOCK TABLES的语句期间，在比较lex->sql_command和SQLCOM_LOCK_TABLES时，需要处理这种check。
+        // 当一个表请求以MDL_SHARED_READ_ONLY方式打开时，我们也无需请求IX意向排他锁去备份锁。
       /*
         MDL_request::is_ddl_or_lock_tables_lock_request() returns true for
         DDL and LOCK TABLES statements. Since there isn't a way on MDL API level
@@ -5387,6 +5462,7 @@ bool lock_table_names(THD *thd, TABLE_LIST *tables_start,
         with requested MDL_SHARED_READ_ONLY lock. For example, such use case
         takes place when FLUSH PRIVILEGES executed.
       */
+      // LOCK TABLES或MDL_SHARED_READ_ONLY方式打开时不需要backup
       if (thd->lex->sql_command != SQLCOM_LOCK_TABLES &&
           table->mdl_request.type != MDL_SHARED_READ_ONLY)
         acquire_backup_lock = true;
@@ -5395,33 +5471,44 @@ bool lock_table_names(THD *thd, TABLE_LIST *tables_start,
     if (table->mdl_request.type != MDL_SHARED_READ_ONLY) {
       /* Write lock on normal tables is not allowed in a read only transaction.
        */
+      // 只读事务中不允许写锁。请求是非只读，线程是只读事务
       if (thd->tx_read_only) {
         my_error(ER_CANT_EXECUTE_IN_READ_ONLY_TRANSACTION, MYF(0));
         return true;
       }
 
+      // 不是明确跳过空间MDL lock时，加入schema_set中。
+      // 当获取strong metadata锁时，不需要全局、表空间范围或表schema范围的IX意向排他锁。
+      // When acquiring "strong" (SNW, SNRW, X) metadata locks on tables to
+      //  be open do not acquire global, tablespace-scope and schema-scope IX locks.
       if (!(flags & MYSQL_OPEN_SKIP_SCOPED_MDL_LOCK)) {
         schema_set.insert(table);
       }
+      // 不是只读模式，则需要保持全局读锁，读时无法写
       need_global_read_lock_protection = true;
     }
 
+    // 需要处理的mdl_request加入到mdl_requests列表。
     mdl_requests.push_front(&table->mdl_request);
   }
 
   // Phase 2: Iterate over the schema set, add an IX lock for each
   //          schema name.
+  // 第二步：迭代schema set，构造schema（即database库）的MDL请求。
   if (!(flags & MYSQL_OPEN_SKIP_SCOPED_MDL_LOCK) && !mdl_requests.is_empty()) {
     /*
       Scoped locks: Take intention exclusive locks on all involved
       schemas.
     */
+    // 遍历处理schema_set
     for (const TABLE_LIST *table_l : schema_set) {
       MDL_request *schema_request = new (thd->mem_root) MDL_request;
       if (schema_request == nullptr) return true;
       MDL_REQUEST_INIT(schema_request, MDL_key::SCHEMA, table_l->db, "",
                        MDL_INTENTION_EXCLUSIVE, MDL_TRANSACTION);
+      // 构建schema_request加入mdl_requests
       mdl_requests.push_front(schema_request);
+      // schema_reqs非空，则也将schema_request加入
       if (schema_reqs) schema_reqs->push_back(schema_request);
     }
 
@@ -5432,6 +5519,7 @@ bool lock_table_names(THD *thd, TABLE_LIST *tables_start,
         duration.
       */
       if (thd->global_read_lock.can_acquire_protection()) return true;
+      // 构建全局读锁请求，并加入到mdl_requests
       MDL_REQUEST_INIT(&global_request, MDL_key::GLOBAL, "", "",
                        MDL_INTENTION_EXCLUSIVE, MDL_STATEMENT);
       mdl_requests.push_front(&global_request);
@@ -5439,12 +5527,14 @@ bool lock_table_names(THD *thd, TABLE_LIST *tables_start,
   }
 
   if (acquire_backup_lock) {
+      // 如果需要备份，则构建backup lock请求，加入到mdl_requests
     MDL_REQUEST_INIT(&backup_lock_request, MDL_key::BACKUP_LOCK, "", "",
                      MDL_INTENTION_EXCLUSIVE, MDL_TRANSACTION);
     mdl_requests.push_front(&backup_lock_request);
   }
 
   // Phase 3: Acquire the locks which have been requested so far.
+  // 步骤三：根据前面构建的mdl_requests来请求所需的锁。
   if (thd->mdl_context.acquire_locks(&mdl_requests, lock_wait_timeout))
     return true;
 
@@ -5454,6 +5544,7 @@ bool lock_table_names(THD *thd, TABLE_LIST *tables_start,
    FLUSH TABLES ... WITH READ LOCK and FLUSH TABLES ... FOR EXPORT
    as they are not supposed to be affected by read_only modes.
    */
+  // 要获取全局读锁显然不止有读，所以检查当前环境是否是read_only，不是才可以接着执行。
   if (need_global_read_lock_protection &&
       !(flags & MYSQL_OPEN_SKIP_SCOPED_MDL_LOCK) &&
       !(flags & MYSQL_LOCK_IGNORE_GLOBAL_READ_ONLY) &&
@@ -5461,6 +5552,7 @@ bool lock_table_names(THD *thd, TABLE_LIST *tables_start,
     return true;
 
   // Check schema read only for all schemas.
+  // 因为可能需要修改schema，所以检查schema是否是read only
   for (const TABLE_LIST *table_l : schema_set)
     if (check_schema_readonly(thd, table_l->db)) return true;
 
@@ -5470,6 +5562,8 @@ bool lock_table_names(THD *thd, TABLE_LIST *tables_start,
     dictionary to get hold of the tablespace name, and in order
     to do this, we must have acquired a lock on the table.
   */
+  // 第四步：锁住表空间names。这个操作不能在之前的步骤中处理，因为我们需要读dictionary获取表空间name并hold住供后面修改，
+  // 所以我们必须要先获取表锁。故而要先获取表锁，再对表空间加锁。
   return get_and_lock_tablespace_names(thd, tables_start, tables_end,
                                        lock_wait_timeout, flags);
 }
@@ -5692,7 +5786,7 @@ static bool set_non_locking_read_for_ACL_table(THD *thd, TABLE_LIST *tl,
   @param[in]     thd      Thread context.
   @param[in,out] start    List of tables to be open (it can be adjusted for
                           statement that uses tables only implicitly, e.g.
-                          for "SELECT f1()").
+                          for "SELECT f1()").   // 当语句中表不明确时，它能自己调整
   @param[out]    counter  Number of tables which were open.
   @param[in]     flags    Bitmap of flags to modify how the tables will be
                           open, see open_table() description for details.
@@ -5706,10 +5800,17 @@ static bool set_non_locking_read_for_ACL_table(THD *thd, TABLE_LIST *tl,
     execution to table list. Statement that uses SFs, invokes triggers or
     requires foreign key checks will be marked as requiring prelocking.
     Prelocked mode will be enabled for such query during lock_tables() call.
+    // SP Stored Procedure，存储过程
+    // SF Stored Function，存储函数
+    // view 视图，triggers 触发器
+    // 除非我们已经在预锁模式下并且预锁策略指示，否则这个函数将预缓存所有query显示或隐示（通过视图和触发器）的SP/SFs，
+    // 并添加所有执行需要的表到table list。使用SFs、引用triggers或者需要外键检查的语句都将被标记为需要预加锁。
+    // 在lock_tables()调用的时候，将为这些query启用预加锁模式。
 
     If query for which we are opening tables is already marked as requiring
     prelocking it won't do such precaching and will simply reuse table list
     which is already built.
+    // 如果查询的是我们正打开的表，且已经被标记为需要预加锁，它将不用在做这些预缓存操作，直接简单的reuse那些已经built的表。
 
   @retval  false  Success.
   @retval  true   Error, reported.
@@ -5724,6 +5825,10 @@ bool open_tables(THD *thd, TABLE_LIST **start, uint *counter, uint flags,
     routines list which stay valid and allow to continue iteration when new
     elements are added to the tail of the lists.
   */
+  // 每次迭代结束时：
+  // 使用指针table_to_open指向上一次处理过的TABLE_LIST元素中的next_global成员。
+  // 使用指针sroutine_to_open指向上一次处理过的Sroutine_hash_entry元素中的next成员。
+  // 相应的，table list and stored routines list末尾加入新元素时会仍然保持保持有效，能继续迭代。
   TABLE_LIST **table_to_open;
   TABLE *old_table;
   Sroutine_hash_entry **sroutine_to_open;
@@ -5749,6 +5854,10 @@ restart:
     the current session (i.e. to avoid having a DDL blocked by HANDLERs
     opened for a long time).
   */
+  // 关闭那些被标为flush的表或者是与当前等待独占metadata锁抵制的那些HANDLER tables。
+  // 这是必须的，因为我们需要避免死锁，另外我们需要避免在执行期间有一个时间点来处理这些HANDLERs关闭，
+  // 尽管执行中这些HANDLERs关闭不会对我们当前执行的session制造麻烦。
+  // 当前线程的handler_tables_hash中有打开的表，尝试Flush（close and mark for re-open），避免死锁以及阻塞。
   if (!thd->handler_tables_hash.empty()) mysql_ha_flush(thd);
 
   has_prelocking_list = thd->lex->requires_prelocking();
@@ -5761,6 +5870,18 @@ restart:
     THD_STAGE_INFO(thd, stage_opening_tables);
 
   /*
+    MDL_INTENTION_EXCLUSIVE(IX)
+    MDL_SHARED(S)
+    MDL_SHARED_HIGH_PRIO(SH)
+    MDL_SHARED_READ(SR)
+    MDL_SHARED_WRITE(SW)
+    MDL_SHARED_WRITE_LOW_PRIO(SWL)
+    MDL_SHARED_UPGRADABLE(SU)
+    MDL_SHARED_READ_ONLY(SRO)
+    MDL_SHARED_NO_WRITE(SNW)
+    MDL_SHARED_NO_READ_WRITE(SNRW)
+    MDL_EXCLUSIVE(X)
+
     If we are executing LOCK TABLES statement or a DDL statement
     (in non-LOCK TABLES mode) we might have to acquire upgradable
     semi-exclusive metadata locks (SNW or SNRW) on some of the
@@ -5774,14 +5895,23 @@ restart:
     lock will be reused (thanks to the fact that in recursive case
     metadata locks are acquired without waiting).
   */
+  // 如果是执行锁表的语句，或一个无锁的DDL模式。我们在这些表上需要获取可升级的半独占元数据锁SNW or SNRW。
+  // 如果执行CREATE TABLE .. If NOT EXISTS .. SELECT，表不存在，我们需要获取独占锁。
+  // 这些锁的获取一次完成，避免出现死锁或饥饿。后面如果有需要打开相同的表，不用等待，直接可以用。
   if (!(flags & (MYSQL_OPEN_HAS_MDL_LOCK | MYSQL_OPEN_FORCE_SHARED_MDL |
                  MYSQL_OPEN_FORCE_SHARED_HIGH_PRIO_MDL))) {
+      // 上面三种锁都不需要获取。
+      // 见enum_locked_tables_mode，这里非0表示以及有锁了。
     if (thd->locked_tables_mode) {
       /*
         Under LOCK TABLES, we can't acquire new locks, so we instead
         need to check if appropriate locks were pre-acquired.
       */
+      // 当线程是locked模式时，无法再获取锁，所以检查是否已经预加锁了。
+      // 取到第一个不是当前query自己的需要预加锁的表。为null表示当前query已经全预加锁完成。
       TABLE_LIST *end_table = thd->lex->first_not_own_table();
+      // 检查表的mdl是否可以升级为独占锁，或者从backup中获取对应表的锁。
+      // 从start到end，遍历处理。
       if (open_tables_check_upgradable_mdl(thd, *start, end_table) ||
           acquire_backup_lock_in_lock_tables_mode(thd, *start, end_table)) {
         error = true;
@@ -5789,11 +5919,13 @@ restart:
       }
     } else {
       TABLE_LIST *table;
+      // 线程当前无锁，则可以直接请求锁表。会锁住表、库、表空间。
       if (lock_table_names(thd, *start, thd->lex->first_not_own_table(),
                            ot_ctx.get_timeout(), flags)) {
         error = true;
         goto err;
       }
+      // 检查是否需要更strong的锁，需要则ticket置空表示锁未满足？
       for (table = *start; table && table != thd->lex->first_not_own_table();
            table = table->next_global) {
         if (table->mdl_request.is_ddl_or_lock_tables_lock_request() ||
@@ -5807,15 +5939,18 @@ restart:
     Perform steps of prelocking algorithm until there are unprocessed
     elements in prelocking list/set.
   */
+  // 实施预加锁步骤
   while (*table_to_open ||
          (thd->locked_tables_mode <= LTM_LOCK_TABLES && *sroutine_to_open)) {
     /*
       For every table in the list of tables to open, try to find or open
       a table.
     */
+    // 对于每个需要打开的table，尝试找到并打开
     for (tables = *table_to_open; tables;
          table_to_open = &tables->next_global, tables = tables->next_global) {
       old_table = (*table_to_open)->table;
+      // open table
       error = open_and_process_table(thd, thd->lex, tables, counter,
                                      prelocking_strategy, has_prelocking_list,
                                      &ot_ctx);
@@ -6373,10 +6508,13 @@ static bool check_lock_and_start_stmt(THD *thd,
   @note
     If table_l is a list, not a single table, the list is temporarily
     broken.
+    // 如果table_l是一个列表，它会临时拆开，只处理一个表打开。
 
   @details
     This function is meant as a replacement for open_ltable() when
     MERGE tables can be opened. open_ltable() cannot open MERGE tables.
+    // 这个函数是在打开merge tables时对open_ltable的一个替代。因为open_ltable不能打开合并的表
+    // 两个函数有很多不同，明显的是open_ltable不会调用decide_logging_format和lock_tables。
 
     There may be more differences between open_n_lock_single_table() and
     open_ltable(). One known difference is that open_ltable() does
@@ -6390,6 +6528,7 @@ TABLE *open_n_lock_single_table(THD *thd, TABLE_LIST *table_l,
   TABLE_LIST *save_next_global;
   DBUG_TRACE;
 
+  // 对于table list，拆开链表将第一个后面入口保存
   /* Remember old 'next' pointer. */
   save_next_global = table_l->next_global;
   /* Break list. */
@@ -6401,6 +6540,7 @@ TABLE *open_n_lock_single_table(THD *thd, TABLE_LIST *table_l,
   table_l->required_type = dd::enum_table_type::BASE_TABLE;
 
   /* Open the table. */
+  // open tables
   if (open_and_lock_tables(thd, table_l, flags, prelocking_strategy))
     table_l->table = nullptr; /* Just to be sure. */
 
@@ -6506,6 +6646,7 @@ end:
 
 /**
   Open all tables in list, locks them and optionally process derived tables.
+  // 打开所有的表，加锁并有选择的处理子表。
 
   @param thd		      Thread context.
   @param tables	              List of tables for open and locking.
@@ -6517,11 +6658,13 @@ end:
 
   @note
     The thr_lock locks will automatically be freed by close_thread_tables().
+    // 线程锁将自动被close_thread_tables释放
 
   @note
     open_and_lock_tables() is not intended for open-and-locking system tables
     in those cases when execution of statement has started already and other
     tables have been opened. Use open_trans_system_tables_for_read() instead.
+    // open_and_lock_tables 不是用于在已经打开其他表并执行语句时再打开系统表的，这种情况下使用open_trans_system_tables_for_read
 
   @retval false  OK.
   @retval true   Error
@@ -6530,6 +6673,7 @@ end:
 bool open_and_lock_tables(THD *thd, TABLE_LIST *tables, uint flags,
                           Prelocking_strategy *prelocking_strategy) {
   uint counter;
+  // mdl保存点，以备后面回滚
   MDL_savepoint mdl_savepoint = thd->mdl_context.mdl_savepoint();
   DBUG_TRACE;
 
@@ -6542,10 +6686,14 @@ bool open_and_lock_tables(THD *thd, TABLE_LIST *tables, uint flags,
     the global transaction state is inflicted when the attachable one
     will commmit.
   */
+  // open_and_lock_tables 不应用于打开系统表。
+  // 因为调用open_and_lock_tables时没有活跃的可附加事务。这里在读写相应表时，assert明确指定抛异常。
+  // 调用者在读写时必须确保对全局事务状态没有副作用，当附带的有commit时，处理起来是很痛苦的。所以索性没事务active直接异常？
   assert(!thd->is_attachable_ro_transaction_active() &&
          (!thd->is_attachable_rw_transaction_active() ||
           !strcmp(tables->table_name, "gtid_executed")));
 
+  // open tables
   if (open_tables(thd, &tables, &counter, flags, prelocking_strategy)) goto err;
 
   DBUG_EXECUTE_IF("sleep_open_and_lock_after_open", {
@@ -6555,6 +6703,7 @@ bool open_and_lock_tables(THD *thd, TABLE_LIST *tables, uint flags,
     thd->proc_info = old_proc_info;
   });
 
+  // lock tables
   if (lock_tables(thd, tables, counter, flags)) goto err;
 
   return false;

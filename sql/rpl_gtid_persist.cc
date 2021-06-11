@@ -162,6 +162,7 @@ bool Gtid_table_access_context::init(THD **thd, TABLE **table, bool is_write) {
   }
 
   (*thd)->is_operating_gtid_table_implicitly = true;
+  // open table
   bool ret = this->open_table(
       *thd, DB_NAME, TABLE_NAME, Gtid_table_persistor::number_fields,
       m_is_write ? TL_WRITE : TL_READ, table, &m_backup);
@@ -662,16 +663,19 @@ int Gtid_table_persistor::fetch_gtids(Gtid_set *gtid_set) {
   Gtid_table_access_context table_access_ctx;
   THD *thd = current_thd;
 
+  // 初始化线程访问表 context
   if (table_access_ctx.init(&thd, &table, false)) {
     ret = 1;
     goto end;
   }
 
+  // 初始化随机读或scan，这里扫描
   if ((err = table->file->ha_rnd_init(true))) {
     ret = -1;
     goto end;
   }
 
+  // 循环读取记录到buf中，然后编码成gtid text后，处理加入gtid_set
   while (!(err = table->file->ha_rnd_next(table->record[0]))) {
     /* Store the gtid into the gtid_set */
 
@@ -691,6 +695,7 @@ int Gtid_table_persistor::fetch_gtids(Gtid_set *gtid_set) {
     global_sid_lock->unlock();
   }
 
+  // 结束随机访表，错误不是end-of-file时异常返回。
   table->file->ha_rnd_end();
   if (err != HA_ERR_END_OF_FILE) ret = -1;
 

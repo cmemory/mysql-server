@@ -2982,6 +2982,7 @@ int handler::ha_rnd_next(uchar *buf) {
   // Set status for the need to update generated fields
   m_update_generated_read_fields = table->has_gcol();
 
+  // 调用当前handler的rnd_next，读取一行数据到buf中
   MYSQL_TABLE_IO_WAIT(PSI_TABLE_FETCH_ROW, MAX_KEY, result,
                       { result = rnd_next(buf); })
   if (!result && m_update_generated_read_fields) {

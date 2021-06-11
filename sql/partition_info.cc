@@ -2763,11 +2763,13 @@ bool has_external_data_or_index_dir(partition_info &pi) {
 bool fill_partition_tablespace_names(partition_info *part_info,
                                      Tablespace_hash_set *tablespace_set) {
   // Do nothing if table is not partitioned.
+  // 表未分区，直接返回
   if (!part_info) return false;
 
   // Traverse through all partitions.
   List_iterator<partition_element> part_it(part_info->partitions);
   partition_element *part_elem;
+  // 遍历各分区，将分区中的表空间加入tablespace_set中
   while ((part_elem = part_it++)) {
     // Add tablespace name from partition elements, if used.
     if (part_elem->tablespace_name && strlen(part_elem->tablespace_name)) {
@@ -2775,6 +2777,7 @@ bool fill_partition_tablespace_names(partition_info *part_info,
     }
 
     // Traverse through all subpartitions.
+    // 遍历分区的子分区，同样判断将表空间加入tablespace_set中
     List_iterator<partition_element> sub_it(part_elem->subpartitions);
     partition_element *sub_elem;
     while ((sub_elem = sub_it++)) {

@@ -58,6 +58,7 @@ bool System_table_access::open_table(THD *thd, std::string dbstr,
   Query_tables_list query_tables_list_backup;
 
   DBUG_TRACE;
+  // 打开前操作，系统表初始化相关flag
   before_open(thd);
 
   /*
@@ -68,7 +69,9 @@ bool System_table_access::open_table(THD *thd, std::string dbstr,
     is accessed and updated in the process of opening and locking
     tables.
   */
+  // 保存查询表的当前状态，并准备好处理新的statment
   thd->lex->reset_n_backup_query_tables_list(&query_tables_list_backup);
+  // 打开表的状态备份处理
   thd->reset_n_backup_open_tables_state(backup,
                                         Open_tables_state::SYSTEM_TABLES);
 
@@ -77,6 +80,7 @@ bool System_table_access::open_table(THD *thd, std::string dbstr,
 
   tables.open_strategy = TABLE_LIST::OPEN_IF_EXISTS;
 
+  // open tables
   if (!open_n_lock_single_table(thd, &tables, tables.lock_descriptor().type,
                                 m_flags)) {
     close_thread_tables(thd);

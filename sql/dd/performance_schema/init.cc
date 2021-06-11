@@ -320,6 +320,8 @@ bool create_pfs_schema(THD *thd) {
 
 bool init_pfs_tables(enum_dd_init_type init_type) {
   if (init_type == dd::enum_dd_init_type::DD_INITIALIZE)
+    // 启动一个线程执行 initialize_pfs 函数
+    // 创建database performance_schema 以及它包含的 tables
     return ::bootstrap::run_bootstrap_thread(nullptr, nullptr, &initialize_pfs,
                                              SYSTEM_THREAD_DD_INITIALIZE);
   else if (init_type == dd::enum_dd_init_type::DD_RESTART_OR_UPGRADE)

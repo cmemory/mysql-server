@@ -514,6 +514,12 @@ class Open_tables_state {
     used to indicate whether the so-called "locked tables mode" is on,
     and what kind of mode is active.
 
+    枚举enum_locked_tables_mode 和 locked_tables_mode 成员用于指示是否locked tables mode开启以启用的是什么模式。
+    锁表模式一般用于需要一次性打开并锁住多个表时使用，用于跨多个查询语句或子语句。
+    通常有两种情况需要使用：
+        1、查询时使用存储函数或触发器，因为函数或触发器中的语句可能需要执行多次。
+        2、实施锁多表，因为这是打开多个表被子查询多次重复使用，直至UNLOCK TABLES
+
     Locked tables mode is used when it's necessary to open and
     lock many tables at once, for usage across multiple
     (sub-)statements.
@@ -522,6 +528,15 @@ class Open_tables_state {
     triggers may be executed many times, or for implementation of
     LOCK TABLES, in which case the opened tables are reused by all
     subsequent statements until a call to UNLOCK TABLES.
+
+    应用与存储函数和触发器的表锁模式也被叫做预加锁模式。
+    这种模式下，首次调用open_tables打开表的时候，会分析语句中使用的所有的函数，
+    并将所有间接使用的table加入列表中等待打开和加锁。
+
+    同时它也会将语句的解析树标记为需要预加锁。之后lock_tables会锁住整个tables列表，
+    并将THD::locked_tables_mode置为LTM_PRELOCKED状态。
+    所有在函数和触发器中的语句执行都直接使用预加锁的tables，而不需要在打开属于自己的表。
+    一旦主语句的close_thread_tables被调用，预加锁模式会自动关闭。
 
     The kind of locked tables mode employed for stored functions and
     triggers is also called "prelocked mode".

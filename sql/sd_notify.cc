@@ -62,6 +62,7 @@ std::stringstream NotifyGlobals::fmt;
 */
 void notify_connect() {
 #ifndef _WIN32
+  // 读取环境变量
   const char *sockstr = getenv("NOTIFY_SOCKET");
   if (sockstr == nullptr) {
 #ifdef WITH_SYSTEMD_DEBUG
@@ -79,12 +80,14 @@ void notify_connect() {
            sunpathlen);
     return;
   }
+  // 新建socket
   NotifyGlobals::socket = socket(AF_UNIX, SOCK_DGRAM, 0);
 
   sockaddr_un addr;
   socklen_t addrlen;
   memset(&addr, 0, sizeof(sockaddr_un));
   addr.sun_family = AF_UNIX;
+  // 处理sockstr为addr地址
   if (sockstr[0] != '@') {
     strcpy(addr.sun_path, sockstr);
     addrlen = offsetof(struct sockaddr_un, sun_path) + sockstrlen + 1;
@@ -94,6 +97,7 @@ void notify_connect() {
     addrlen = offsetof(struct sockaddr_un, sun_path) + sockstrlen;
   }
   int ret = -1;
+  // 建立socket连接
   do {
     ret = connect(NotifyGlobals::socket,
                   reinterpret_cast<const sockaddr *>(&addr), addrlen);
@@ -132,6 +136,7 @@ void notify() {
   std::cerr << "Send to systemd notify socket: " << note;
 #endif /* WITH_SYSTEMD_DEBUG */
 
+  // 循环将输入内容发送到NotifyGlobals::socket
   while (true) {
     size_t remaining = end - src;
     status = write(NotifyGlobals::socket, src, remaining);

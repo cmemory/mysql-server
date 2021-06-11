@@ -126,6 +126,7 @@ int sys_var_init() {
       {PERSIST_ONLY_ADMIN_X509_SUBJECT, PERSISTED_GLOBALS_LOAD},
       system_charset_info, PSI_INSTRUMENT_ME);
 
+  // 将all_sys_vars中变量写入system_variable_hash中，有冲突就会报错
   if (mysql_add_sys_var_chain(all_sys_vars.first)) goto error;
 
   return 0;
@@ -137,8 +138,10 @@ error:
 
 int sys_var_add_options(std::vector<my_option> *long_options, int parse_flags) {
   DBUG_TRACE;
-
+  // sys_vars.cc 中有很多sys_var子类的静态变量
+  // 变量初始化的时候会调用sys_var构造函数构建，进而填充all_sys_vars，此时它已不再是空。
   for (sys_var *var = all_sys_vars.first; var; var = var->next) {
+      // 系统参数是命令行设置，且是early，则加入到long_options中
     if (var->register_option(long_options, parse_flags)) goto error;
   }
 
@@ -625,6 +628,7 @@ int mysql_add_sys_var_chain(sys_var *first) {
 
   for (var = first; var; var = var->next) {
     /* this fails if there is a conflicting variable name. */
+    // unordered_map的emplace方法，插入元素返回pair<iterator, bool>，iterator为key在map中位置，bool为是否有新插入
     if (!system_variable_hash->emplace(to_string(var->name), var).second) {
       LogErr(ERROR_LEVEL, ER_DUPLICATE_SYS_VAR, var->name.str);
       goto error;

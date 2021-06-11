@@ -1125,6 +1125,11 @@ struct TABLE_SHARE {
        gets a unique id.
      * for everything else (e.g. information schema tables),
        the version id is zero.
+   返回table metadata version：
+        1、对于基本表和views，返回table_map_id。它被指定为全局counter，每次加载新表进表定义缓存（TDC）时，自增。
+        2、对于临时表，也返回table_map_id。但是临时表的table_map_id指定为thd->query_id，这个是线程本地的counter，
+        每次新的sql语句查询会递增。由于临时表都是线程本地的，所以每个临时表都会有一个唯一id
+        3、对于其他的（如information schema tables），version id是0。
 
    This choice of version id is a large compromise
    to have a working prepared statement validation in 5.1. In
@@ -1164,6 +1169,22 @@ struct TABLE_SHARE {
    track that a change has taken place when a view is replaced
    with a base table, a base table is replaced with a temporary
    table and so on.
+
+   在5.1中为了实现预定义语句的校验，选择使用version id是一个很大的折衷。未来版本中ids将被持久化。
+   下面来解释这个有限的解决方案为什么以及怎么校验预定义语句的。
+   1、首先，version numbers的集合与其他表类型互不相交。因此临时表的version id不会与view的version id比较，反之亦然。
+   2、其次，对于基本的表和view，我们知道每次DDL时都会刷新他们各自共享的TDC（table_definition_cache）。
+    这保证当表已经被altered、dropped或者recreated时，将获得新增version id。
+    [不幸的是，因为TDC中的元素也会基于LRU进行刷新，这样选择version ids会导致假的异常（两边id不一致）
+    例如：当TDC很小时，查询SELECT * FROM INFORMATION_SCHEMA.TABLES可能会刷新所有的元，
+    从而导致验证失败，接着会重新处理预定义语句。这完全是可接受的，因为只要预定义语句是自动的重新处理，
+    错误的校验结果只是对性能上有影响，没有其他问题。况且也没有更简单的解决方式了。]
+
+    对于临时表，使用thd->query_id确保当一个临时表被altered或recreated时，一个新的version id被指定。
+    这一套验证是非常好的，且为了将不会改变。
+
+    information schema tables的Metadata是不会变更的。所以我们可以安全的将0作为它们的version id。
+   3、最后，考虑table类型，我们总是追踪table类型的变更，如view被替换为基本表，基本表被替换为临时表等。
 
    @retval  0        For schema tables, DD tables and system views.
             non-0    For bases tables, views and temporary tables.
@@ -2576,6 +2597,7 @@ class Derived_key {
 
 class Table_function;
 /*
+ * from 子句中引用的表。不同的sql语句，这些表有不同的类型
   Table reference in the FROM clause.
 
   These table references can be of several types that correspond to
@@ -2584,28 +2606,28 @@ class Table_function;
   belongs to a certain type.
 
   1) table (TABLE_LIST::view == NULL)
-     - base table
+     - base table   基础表（不是view，不是子查询表）
        (TABLE_LIST::derived == NULL)
-     - subquery - TABLE_LIST::table is a temp table
+     - subquery - TABLE_LIST::table is a temp table     临时表（不是view，是子查询表）
        (TABLE_LIST::derived != NULL)
-     - information schema table
+     - information schema table     原数据信息表（不是view，指定是schema_table）
        (TABLE_LIST::schema_table != NULL)
        NOTICE: for schema tables TABLE_LIST::field_translation may be != NULL
   2) view (TABLE_LIST::view != NULL)
-     - merge    (TABLE_LIST::effective_algorithm == VIEW_ALGORITHM_MERGE)
+     - merge    (TABLE_LIST::effective_algorithm == VIEW_ALGORITHM_MERGE)   （view，指定算法merge）
            also (TABLE_LIST::field_translation != NULL)
-     - temptable(TABLE_LIST::effective_algorithm == VIEW_ALGORITHM_TEMPTABLE)
+     - temptable(TABLE_LIST::effective_algorithm == VIEW_ALGORITHM_TEMPTABLE)   （view，指定算法temptable）
            also (TABLE_LIST::field_translation == NULL)
-  3) nested table reference (TABLE_LIST::nested_join != NULL)
-     - table sequence - e.g. (t1, t2, t3)
+  3) nested table reference (TABLE_LIST::nested_join != NULL)   嵌套表，nested_join指定
+     - table sequence - e.g. (t1, t2, t3)   多表序列
        TODO: how to distinguish from a JOIN?
-     - general JOIN
+     - general JOIN     普通join？
        TODO: how to distinguish from a table sequence?
-     - NATURAL JOIN
+     - NATURAL JOIN     自然join？不需要指定连接条件。多个表中相同的列进行等值连接，多个相同的列都作为等值条件。
        (TABLE_LIST::natural_join != NULL)
        - JOIN ... USING
          (TABLE_LIST::join_using_fields != NULL)
-     - semi-join
+     - semi-join       semi-join？半连接，当一张表在另一张表找到匹配的记录之后，半连接只返回第一张表中的记录
        ;
 */
 

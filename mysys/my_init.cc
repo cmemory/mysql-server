@@ -138,6 +138,9 @@ bool my_init() {
   set_crt_report_leaks();
 #endif
 
+  // 设定创建新文件和目录的umask
+  // 创建一个文件默认访问权限为 -rw-rw-rw- ，创建目录的默认权限 drwxrwxrwx ，
+  // umask值表明了需要从默认权限中去掉哪些权限来成为最终的默认权限值。
   my_umask = 0640;     /* Default umask for new files */
   my_umask_dir = 0750; /* Default umask for new directories */
 
@@ -148,8 +151,10 @@ bool my_init() {
   if ((str = getenv("UMASK_DIR")) != nullptr)
     my_umask_dir = (int)(atoi_octal(str) | 0700);
 
+  // 初始化线程环境，就是初始化一些全局锁
   if (my_thread_global_init()) return true;
 
+  // 线程结构初始化，结构包含线程id和状态
   if (my_thread_init()) return true;
 
   /* $HOME is needed early to parse configuration files located in ~/ */
@@ -162,6 +167,7 @@ bool my_init() {
 #ifdef _WIN32
     my_win_init();
 #endif
+    // 文件初始化，即构建FileInfoVector
     MyFileInit();
 
     DBUG_PRINT("exit", ("home: '%s'", home_dir));

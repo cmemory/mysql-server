@@ -378,7 +378,7 @@ struct MDL_key {
        inconsistent backup. Such operations are most DDL statements,
        and some administrative statements.
      - TABLESPACE is for tablespaces.
-     - SCHEMA is for schemas (aka databases).
+     - SCHEMA is for schemas (aka databases). // aka Also Known As
      - TABLE is for tables and views.
      - FUNCTION is for stored functions.
      - PROCEDURE is for stored procedures.
@@ -787,6 +787,9 @@ struct MDL_key {
 
 /**
   A pending metadata lock request.
+  一个pending状态的metadata锁请求。
+  一个锁请求和一个授权的metadata锁，不同的类有不同的分配时机以及不同的生存周期，所以他们实现不同。
+  锁请求的分配是由MDL子系统外部控制的，锁授权（tickets）分配时机则是有MDL子系统内部控制的
 
   A lock request and a granted metadata lock are represented by
   different classes because they have different allocation
@@ -964,6 +967,7 @@ class MDL_wait_for_subgraph {
 
   @note Multiple shared locks on a same object are represented by a
         single ticket. The same does not apply for other lock types.
+        多个共享锁在同一个对象上，使用一个ticket链表示。这种处理方式不适用于其他锁类型。
 
   @note There are two groups of MDL_ticket members:
         - "Externally accessible". These members can be accessed from
@@ -975,6 +979,10 @@ class MDL_wait_for_subgraph {
         - "Context private". Such members are private to thread/context
           owning this ticket. I.e. they should not be accessed from other
           threads/contexts.
+        有两种类型的MDL_ticket成员：
+            外部可访问的：当ticket位于锁的waiting或granted队列中时，这类成员需要能被外部其他线程/contexts访问而不是自身。
+                        因此，线程需要在将他们加入队列前或在持有锁维持这些列表时，能改变这些成员，
+            Context私有的：只能自己线程环境访问。
 */
 
 class MDL_ticket : public MDL_wait_for_subgraph {

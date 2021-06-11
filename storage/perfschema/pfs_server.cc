@@ -68,8 +68,10 @@ void cleanup_instrument_config(void);
 void pre_initialize_performance_schema() {
   pfs_initialized = false;
 
+  // 初始化内存性能监控的一些指令元数据及统计数据
   init_all_builtin_memory_class();
 
+  // 统计相关初始化
   PFS_table_stat::g_reset_template.reset();
   global_idle_stat.reset();
   global_table_io_stat.reset();

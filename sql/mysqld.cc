@@ -1935,12 +1935,14 @@ const char *component_urns[] = {"file://component_reference_cache"};
 */
 static bool component_infrastructure_init() {
   bool retval = false;
+  // 初始化register、loader，注册相关基础服务到register
   if (initialize_minimal_chassis(&srv_registry)) {
     LogErr(ERROR_LEVEL, ER_COMPONENTS_INFRASTRUCTURE_BOOTSTRAP);
     return true;
   }
   /* Here minimal_chassis dynamic_loader_scheme_file service has
      to be acquired */
+  // 后面都是从register中获取相关service，部分设置默认service
   srv_registry->acquire(
       "dynamic_loader_scheme_file.mysql_minimal_chassis",
       reinterpret_cast<my_h_service *>(
@@ -4502,19 +4504,27 @@ static inline const char *rpl_make_log_name(PSI_memory_key key, const char *opt,
 }
 
 int init_common_variables() {
+    // 设置umask
   umask(((~my_umask) & 0666));
+  // 设置decimal零值。
   my_decimal_set_zero(&decimal_zero);  // set decimal_zero constant;
+  // time zone设置
   tzset();                             // Set tzname
 
+  // 设置最大线程id
   max_system_variables.pseudo_thread_id = (my_thread_id)~0;
+  // 设置当前时间为系统启动时间
   server_start_time = flush_status_time = my_time(0);
 
+  // 创建binlog filter，Rpl_filter 表和库的包含和排除规则，主要用于replication和binlogging
   binlog_filter = new Rpl_filter;
   if (!binlog_filter) {
     LogErr(ERROR_LEVEL, ER_RPL_BINLOG_FILTERS_OOM, strerror(errno));
     return 1;
   }
 
+  // 初始化线程环境，主要是各种锁。初始化各种全局变量，设置为默认值
+  // my_long_options中的变量由my_getopt初始化，这里不用管
   if (init_thread_environment() || mysql_init_variables()) return 1;
 
   {
@@ -4524,6 +4534,7 @@ int init_common_variables() {
     strmake(system_time_zone, _tzname[tm_tmp.tm_isdst != 0 ? 1 : 0],
             sizeof(system_time_zone) - 1);
 #else
+    // 设置系统time zone
     strmake(system_time_zone, tzname[tm_tmp.tm_isdst != 0 ? 1 : 0],
             sizeof(system_time_zone) - 1);
 #endif
@@ -4543,6 +4554,7 @@ int init_common_variables() {
     initialization, and can not be set in the MYSQL_BIN_LOG constructor (called
     before main()).
   */
+  // mysql_bin_log 设置性能监控的keys
   mysql_bin_log.set_psi_keys(
       key_BINLOG_LOCK_index, key_BINLOG_LOCK_commit,
       key_BINLOG_LOCK_commit_queue, key_BINLOG_LOCK_done,
@@ -4560,6 +4572,7 @@ int init_common_variables() {
     global MYSQL_BIN_LOGs in their constructors, because then they would be
     inited before MY_INIT(). So we do it here.
   */
+  // 初始化mysql_bin_log相关锁
   mysql_bin_log.init_pthread_objects();
 
   /* TODO: remove this when my_time_t is 64 bit compatible */
@@ -4568,6 +4581,7 @@ int init_common_variables() {
     return 1;
   }
 
+  // 设置默认log file name
   if (gethostname(glob_hostname, sizeof(glob_hostname)) < 0) {
     strmake(glob_hostname, STRING_WITH_LEN("localhost"));
     LogErr(WARNING_LEVEL, ER_CALL_ME_LOCALHOST, glob_hostname);
@@ -4576,6 +4590,7 @@ int init_common_variables() {
     strmake(default_logfile_name, glob_hostname,
             sizeof(default_logfile_name) - 5);
 
+    // 设置默认binlog file name
   strmake(default_binlogfile_name, STRING_WITH_LEN("binlog"));
   if (opt_initialize || opt_initialize_insecure) {
     /*
@@ -4588,6 +4603,7 @@ int init_common_variables() {
     opt_bin_log = false;
   }
 
+  // 设置pid file name
   strmake(pidfile_name, default_logfile_name, sizeof(pidfile_name) - 5);
   my_stpcpy(fn_ext(pidfile_name), ".pid");  // Add proper extension
 
@@ -4601,6 +4617,7 @@ int init_common_variables() {
 
     From MySQL 5.5 onwards, the default storage engine is InnoDB.
   */
+  // 设置默认的存储引擎 InnoDB
   default_storage_engine = "InnoDB";
   default_tmp_storage_engine = default_storage_engine;
 
@@ -4612,6 +4629,7 @@ int init_common_variables() {
     mysql_install_plugin(), new entries could be added
     to that list.
   */
+  // 将状态相关的变量都加入到all_status_vars中，SHOW STATUS会展示这些状态信息
   if (add_status_vars(status_vars)) return 1;  // an error was already reported
 
 #ifndef NDEBUG
@@ -4649,6 +4667,7 @@ int init_common_variables() {
                 "");
 #endif
 
+  // 处理命令行参数，并处理相关变量及服务的初始化
   if (get_options(&remaining_argc, &remaining_argv)) return 1;
 
   /*
@@ -4657,6 +4676,7 @@ int init_common_variables() {
     system is initializing.
   */
   if (!opt_bin_log) {
+      // bin log关闭时，从库依赖于bin log的相关配置应该关闭
     /*
       The log-slave-updates should be disabled if binary log is disabled
       and --log-slave-updates option is not set explicitly on command
@@ -4672,6 +4692,7 @@ int init_common_variables() {
       opt_slave_preserve_commit_order = false;
   }
 
+  // 协议的压缩算法设置的值无效时，使用默认的值
   if (opt_protocol_compression_algorithms) {
     if ((opt_protocol_compression_algorithms[0] == 0) ||
         (validate_compression_attributes(
@@ -4686,13 +4707,16 @@ int init_common_variables() {
       LogErr(WARNING_LEVEL, ER_PROTOCOL_COMPRESSION_RESET_LOG);
     }
   }
+  // 更新parser_max_mem_size，预设的默认值是infinite 无限制
   update_parser_max_mem_size();
 
+  // 设置默认的authentication插件，主要基于命令行选项或配置文件
   if (set_default_auth_plugin(default_auth_plugin,
                               strlen(default_auth_plugin))) {
     LogErr(ERROR_LEVEL, ER_AUTH_CANT_SET_DEFAULT_PLUGIN);
     return 1;
   }
+  // 设置mysql版本
   set_server_version();
 
   if (!is_help_or_validate_option()) {
@@ -4773,11 +4797,13 @@ int init_common_variables() {
   longlong default_value;
   sys_var *var;
   /* Calculate and update default value for thread_cache_size. */
+  // 计算并更新默认的thread_cache_size
   if ((default_value = 8 + max_connections / 100) > 100) default_value = 100;
   var = intern_find_sys_var(STRING_WITH_LEN("thread_cache_size"));
   var->update_default(default_value);
 
   /* Calculate and update default value for host_cache_size. */
+  // 计算并更新默认的host_cache_size
   if ((default_value = 128 + max_connections) > 628 &&
       (default_value = 628 + ((max_connections - 500) / 20)) > 2000)
     default_value = 2000;
@@ -4785,20 +4811,24 @@ int init_common_variables() {
   var->update_default(default_value);
 
   /* Fix thread_cache_size. */
+  // 修复Per_thread_connection_handler中的线程缓存值
   if (!thread_cache_size_specified &&
       (Per_thread_connection_handler::max_blocked_pthreads =
            8 + max_connections / 100) > 100)
     Per_thread_connection_handler::max_blocked_pthreads = 100;
 
   /* Fix host_cache_size. */
+  // 修复host_cache_size
   if (!host_cache_size_specified &&
       (host_cache_size = 128 + max_connections) > 628 &&
       (host_cache_size = 628 + ((max_connections - 500) / 20)) > 2000)
     host_cache_size = 2000;
 
   /* Fix back_log */
+  // 修复back_log大小
   if (back_log == 0 && (back_log = max_connections) > 65535) back_log = 65535;
 
+  // 初始化其他外部变量
   unireg_init(opt_specialflag); /* Set up extern variables */
   while (!(my_default_lc_messages =
                my_locale_by_name(nullptr, lc_messages, strlen(lc_messages)))) {
@@ -4813,9 +4843,12 @@ int init_common_variables() {
     return 1;
   init_client_errs();
 
+  // 客户端插件层初始化
   mysql_client_plugin_init();
   if (item_create_init()) return 1;
+  // 初始化特殊的items，如func sleep、short uuid
   item_init();
+  // range_optimizer初始化，全局初始化为null_element
   range_optimizer_init();
   my_string_stack_guard = check_enough_stack_size;
   /*
@@ -4824,6 +4857,9 @@ int init_common_variables() {
     test purposes, to be able to start "mysqld" even if
     the requested character set is not available (see bug#18743).
   */
+  // 后面很长一段都是在处理mysql的默认字符集
+
+  // 处理逗号分隔的字符集列表，取第一个有效的字符集使用
   for (;;) {
     char *next_character_set_name =
         strchr(const_cast<char *>(default_character_set_name), ',');
@@ -4843,6 +4879,7 @@ int init_common_variables() {
     }
   }
 
+  // 处理字符集校对细分
   if (default_collation_name) {
     CHARSET_INFO *default_collation;
     default_collation = get_charset_by_name(default_collation_name, MYF(0));
@@ -4892,6 +4929,7 @@ int init_common_variables() {
     return 1;
   }
 
+  // 默认本地时间支持
   while (!(my_default_lc_time_names = my_locale_by_name(
                nullptr, lc_time_names_name, strlen(lc_time_names_name)))) {
     LogErr(ERROR_LEVEL, ER_FAILED_TO_FIND_LOCALE_NAME, lc_time_names_name);
@@ -4903,6 +4941,7 @@ int init_common_variables() {
   global_system_variables.lc_time_names = my_default_lc_time_names;
 
   /* check log options and issue warnings if needed */
+  // 检查log相关选项
   if (opt_general_log && opt_general_logname &&
       !(log_output_options & LOG_FILE) && !(log_output_options & LOG_NONE))
     LogErr(WARNING_LEVEL, ER_LOG_FILES_GIVEN_LOG_OUTPUT_IS_TABLE,
@@ -4954,6 +4993,7 @@ int init_common_variables() {
   if (opt_validate_config) return 0;
 
   /* create the data directory if requested */
+  // 如果指定initialize参数，创建数据存储目录
   if (unlikely(opt_initialize) &&
       initialize_create_data_directory(mysql_real_data_home))
     return 1;
@@ -4963,6 +5003,7 @@ int init_common_variables() {
     insensitive names.  If this is not done the users MyISAM tables will
     get corrupted if accesses with names of different case.
   */
+  // 处理lower_case_table_names配置是否与文件系统的大小写敏感性一致
   DBUG_PRINT("info", ("lower_case_table_names: %d", lower_case_table_names));
   lower_case_file_system = test_if_case_insensitive(mysql_real_data_home);
   if (!lower_case_table_names && lower_case_file_system == 1) {
@@ -4986,6 +5027,7 @@ int init_common_variables() {
   }
 
   /* Reset table_alias_charset, now that lower_case_table_names is set. */
+  // 大小写敏感性确定后，需要重新设定表的字符集
   table_alias_charset =
       (lower_case_table_names ? &my_charset_utf8_tolower_ci : &my_charset_bin);
 
@@ -4993,6 +5035,8 @@ int init_common_variables() {
     Build do_table and ignore_table rules to hashes
     after the resetting of table_alias_charset.
   */
+  // 重置表的字符集后，需要重新build do_table hash 和 ignore_table hash。
+  // 这两个hash都是 Rpl_filter 对表的filter处理，弄成hash主要是为了加快过滤速度。
   if (rpl_global_filter.build_do_table_hash() ||
       rpl_global_filter.build_ignore_table_hash()) {
     LogErr(ERROR_LEVEL, ER_CANT_HASH_DO_AND_IGNORE_RULES);
@@ -5005,10 +5049,12 @@ int init_common_variables() {
   */
 #ifdef WITH_PERFSCHEMA_STORAGE_ENGINE
   rpl_global_filter.wrlock();
+  // global_filter 重置性能监控view
   rpl_global_filter.reset_pfs_view();
   rpl_global_filter.unlock();
 #endif /* WITH_PERFSCHEMA_STORAGE_ENGINE */
 
+  // channel_filters 也需要build下table hash
   if (rpl_channel_filters.build_do_and_ignore_table_hashes()) return 1;
 
   return 0;
@@ -5658,8 +5704,13 @@ static int init_server_components() {
     We need to call each of these following functions to ensure that
     all things are initialized so that unireg_abort() doesn't fail
   */
+  // metadata lock 子系统初始化
+  // https://www.cnblogs.com/zengkefu/p/5678365.html
   mdl_init();
+  // partition相关初始化
   partitioning_init();
+  // 表定义初始化，主要是相关锁及缓存的初始化
+  // 主机名管理相关缓存初始化
   if (table_def_init() | hostname_cache_init(host_cache_size))
     unireg_abort(MYSQLD_ABORT_EXIT);
 
@@ -5679,16 +5730,22 @@ static int init_server_components() {
     Timers not needed if only starting with --help.
   */
   if (!is_help_or_validate_option()) {
+      // 时间到期事件处理系统初始化，利用kqueue并创建一个线程来处理分发就绪事件。
     if (my_timer_initialize())
       LogErr(ERROR_LEVEL, ER_CANT_INIT_TIMER, errno);
     else
       have_statement_timeout = SHOW_OPTION_YES;
   }
 
+  // random初始化，主要用于client和server建立连接时生成随机字符串校验使用。
   randominit(&sql_rand, (ulong)server_start_time, (ulong)server_start_time / 2);
+  // 设置Float Point Unit，浮点运算单元
   setup_fpu();
+  // 初始化从库列表，主要是初始化相关锁
   init_slave_list();
 
+
+  // 初始化error日志 并打开。
   setup_error_log();  // opens the log if needed
 
   enter_cond_hook = thd_enter_cond;
@@ -5697,11 +5754,17 @@ static int init_server_components() {
   set_waiting_for_disk_space_hook = thd_set_waiting_for_disk_space;
   is_killed_hook = thd_killed;
 
+  // 事务缓存初始化。
+  // 因为缓存就是一个map，静态变量，已初始化过了，所以这里的初始化只是锁的初始化。
+  // 可看到，很多初始化都是这样一个套路，初始化锁。
+  // INNODB 事务子系统：https://www.cnblogs.com/zengkefu/p/5678361.html
   if (transaction_cache_init()) {
     LogErr(ERROR_LEVEL, ER_OOM);
     unireg_abort(MYSQLD_ABORT_EXIT);
   }
 
+  // MDL_context_backup_manager 初始化map及对应锁。
+  // 两阶段提交时，当client prepared（一阶段完成）后断开了连接，会将关联到XA transactions上的MDL locks存到这个map中。
   if (MDL_context_backup_manager::init()) {
     LogErr(ERROR_LEVEL, ER_OOM);
     unireg_abort(MYSQLD_ABORT_EXIT);
@@ -5711,6 +5774,8 @@ static int init_server_components() {
     initialize delegates for extension observers, errors have already
     been reported in the function
   */
+  // mysql委托回掉模式初始化。https://blog.csdn.net/sun_ashe/article/details/87886670
+  // Trans_delegate、Binlog_storage_delegate、Server_state_delegate、Binlog_transmit_delegate、Binlog_relay_IO_delegate
   if (delegates_init()) unireg_abort(MYSQLD_ABORT_EXIT);
 
   /* need to configure logging before initializing storage engines */
@@ -5724,6 +5789,7 @@ static int init_server_components() {
   assert((uint)global_system_variables.binlog_format <=
          array_elements(binlog_format_names) - 1);
 
+  // 检查server_id
   opt_server_id_mask = ~ulong(0);
   opt_server_id_mask =
       (opt_server_id_bits == 32) ? ~ulong(0) : (1 << opt_server_id_bits) - 1;
@@ -5732,6 +5798,7 @@ static int init_server_components() {
     unireg_abort(MYSQLD_ABORT_EXIT);
   }
 
+  // 检查bin_log path
   if (opt_bin_log) {
     /* Reports an error and aborts, if the --log-bin's path
        is a directory.*/
@@ -5742,6 +5809,8 @@ static int init_server_components() {
       unireg_abort(MYSQLD_ABORT_EXIT);
     }
 
+    // 检查bin_log index path
+    // https://www.cnblogs.com/rjzheng/p/9721765.html
     /* Reports an error and aborts, if the --log-bin-index's path
        is a directory.*/
     if (opt_binlog_index_name &&
@@ -5754,6 +5823,7 @@ static int init_server_components() {
 
     char buf[FN_REFLEN];
     const char *ln;
+    // 处理默认bin_log name
     if (log_bin_supplied) {
       /*
         Binary log basename defaults to "`hostname`-bin" name prefix
@@ -5788,6 +5858,7 @@ static int init_server_components() {
       to avoid creating the file in an otherwise empty datadir, which will
       cause a succeeding 'mysqld --initialize' to fail.
     */
+    // 打开bin_log index文件
     if (!is_help_or_validate_option() &&
         mysql_bin_log.open_index_file(opt_binlog_index_name, ln, true)) {
       unireg_abort(MYSQLD_ABORT_EXIT);
@@ -5838,6 +5909,10 @@ static int init_server_components() {
     not an empty string, incase it is an empty string default file
     extension will be passed
    */
+  // 主库是binlog，从库是relay log。都有log及log index。
+  // 前面一大段检查了binlog相关文件名，后面一大段处理relay log的相关文件名
+  // https://www.cnblogs.com/ilovejaney/p/13649345.html
+  // https://www.jianshu.com/p/c5da732af894
   relay_log_basename = rpl_make_log_name(
       key_memory_MYSQL_RELAY_LOG_basename, opt_relay_logname,
       default_logfile_name,
@@ -5898,6 +5973,8 @@ static int init_server_components() {
     unireg_abort(MYSQLD_ABORT_EXIT);
   }
 
+  // binlog_row_value_options，MySQL 8.0.3引入，json字段更新时，只记录更新的那部分数据到binlog。
+  // http://www.weijingbiji.com/2072/
   if (global_system_variables.binlog_row_value_options != 0) {
     const char *msg = nullptr;
     longlong err = ER_BINLOG_ROW_VALUE_OPTION_IGNORED;
@@ -5929,11 +6006,16 @@ static int init_server_components() {
   }
 
   /* call ha_init_key_cache() on all key caches to init them */
+  // 初始化所有的key_caches，这些cache主要是ISAM/MyISAM tables使用。
   process_key_caches(&ha_init_key_cache);
 
   /* Allow storage engine to give real error messages */
+  // 注册存储引擎的error messages handler，这样我们就可以直接调用my_error()来处理错误信息
   if (ha_init_errors()) return 1;
 
+  // Global Transaction ID，gtid服务初始化
+  // https://blog.csdn.net/wangxin3618/article/details/82984807
+  // https://www.cnblogs.com/caicz/p/10855605.html
   if (gtid_server_init()) {
     LogErr(ERROR_LEVEL, ER_CANT_INITIALIZE_GTID);
     unireg_abort(MYSQLD_ABORT_EXIT);
@@ -5964,6 +6046,9 @@ static int init_server_components() {
     and before the server component initialization to allow other components
     to register their UDFs at init time and de-register them at deinit time.
   */
+  // Userdefined function，用户自定义函数。
+  // udf全局结构初始化，外部插件初始化的时候可能会注册一些udf，所以全局map需要早些初始化
+  // https://www.cnblogs.com/ghc666/p/8609067.html
   udf_init_globals();
 
   /*
@@ -5972,12 +6057,17 @@ static int init_server_components() {
     If necessary tc_log will be adjusted to point to correct TC_LOG instance
     later.
   */
+  // tc_log
+  // https://www.cnblogs.com/exceptioneye/p/5451960.html
+  // http://blog.chinaunix.net/uid-29957450-id-4547825.html
   tc_log = &tc_log_dummy;
 
   /* This limits ability to configure SSL library through config options */
+  // 初始化ssl
   init_ssl();
 
   /*Load early plugins */
+  // 注册和初始化early plugins
   if (plugin_register_early_plugins(&remaining_argc, remaining_argv,
                                     (is_help_or_validate_option())
                                         ? PLUGIN_INIT_SKIP_INITIALIZATION
@@ -5987,6 +6077,7 @@ static int init_server_components() {
   }
 
   /* Load builtin plugins, initialize MyISAM, CSV and InnoDB */
+  // 加载内置的插件，初始化MyISAM, CSV and InnoDB
   if (plugin_register_builtin_and_init_core_se(&remaining_argc,
                                                remaining_argv)) {
     if (!opt_validate_config)
@@ -5998,12 +6089,17 @@ static int init_server_components() {
     Needs to be done before dd::init() which runs DDL commands (for real)
     during instance initialization.
   */
+  // 初始化sql command flags。主要标记每个命令可能对表的一些修改标识。
   init_sql_command_flags();
 
   /*
     plugin_register_dynamic_and_init_all() needs DD initialized.
     Initialize DD to create data directory using current server.
   */
+  // 初始化dd数据字典。主要维护了诸多引擎数据库的元数据信息
+  // 初始化系统views。早前版本是查询表原信息是需要生成表的，现在是直接在系统中有view，不需要再动态生成。
+  // https://blog.csdn.net/weixin_33767813/article/details/90592713
+  // https://cloud.tencent.com/developer/article/1424549
   if (opt_initialize) {
     if (!is_help_or_validate_option()) {
       if (dd::init(dd::enum_dd_init_type::DD_INITIALIZE)) {
@@ -6023,6 +6119,7 @@ static int init_server_components() {
       data directory. If it is old data directory, DD tables are created.
       If server is starting on data directory with DD tables, DD is initialized.
     */
+    // DD如果存在，处理upgrade
     if (!is_help_or_validate_option() &&
         dd::init(dd::enum_dd_init_type::DD_RESTART_OR_UPGRADE)) {
       LogErr(ERROR_LEVEL, ER_DD_INIT_FAILED);
@@ -6050,6 +6147,8 @@ static int init_server_components() {
    the server install can proceed and complete before any plugin is loaded
    through any config file or pre-programmed command line.
   */
+  // 插件初始化的时候，可能需要找到对应的功能服务。而这些服务都是在mysqld初始化的时候创建的。
+  // 所以前面不用急着加载插件，需要先完成服务初始化工作，需要的服务初始化完成后再加载插件。
   int flags = 0;
 
   if (opt_noacl) flags |= PLUGIN_INIT_SKIP_PLUGIN_TABLE;
@@ -6061,6 +6160,8 @@ static int init_server_components() {
     In the case of upgrade, we need to delay initialization of plugins that
     depend on e.g. mysql tables that will be changed during upgrade.
   */
+  // upgrade会变更一些表的元数据信息。
+  // 如果有插件依赖于这些数据，需要延迟这类插件的初始化。
   if (!is_help_or_validate_option() && !opt_initialize &&
       !dd::upgrade::no_server_upgrade_required() &&
       opt_upgrade_mode != UPGRADE_MINIMAL)
@@ -6083,6 +6184,7 @@ static int init_server_components() {
         my_message_stderr(c, s, f);
       }
     };
+      // 注册和初始化动态插件，同时也会初始化还没初始化的内置插件
     if (plugin_register_dynamic_and_init_all(&remaining_argc, remaining_argv,
                                              flags)) {
       delete_optimizer_cost_module();
@@ -6100,6 +6202,7 @@ static int init_server_components() {
       true; /* Don't separate from init function */
   delete_optimizer_cost_module();
 
+  // 线程池插件处理
   LEX_CSTRING plugin_name = {STRING_WITH_LEN("thread_pool")};
   if (Connection_handler_manager::thread_handling !=
           Connection_handler_manager::SCHEDULER_ONE_THREAD_PER_CONNECTION ||
@@ -6120,11 +6223,14 @@ static int init_server_components() {
 
   if (!is_help_or_validate_option() && dd::upgrade_57::in_progress()) {
     // Populate DD tables with meta data from 5.7
+    // 处理dd表的upgrade，upgrade from .frm to data dictionary，移除了.frm用dd替代了。
     if (dd::init(dd::enum_dd_init_type::DD_POPULATE_UPGRADE)) {
       LogErr(ERROR_LEVEL, ER_DD_POPULATING_TABLES_FAILED);
       unireg_abort(1);
     }
     // Run after_dd_upgrade hook
+    // dd upgrade后执行hook函数。server_state_delegate中如果有注册after_dd_upgrade_from_57，则调用。
+    // 前面delegates_init委托初始化的时候，初始化了server_state_delegate
     if (RUN_HOOK(server_state, after_dd_upgrade_from_57, (nullptr)))
       unireg_abort(MYSQLD_ABORT_EXIT);
   }
@@ -6133,6 +6239,7 @@ static int init_server_components() {
     Store server and plugin IS tables metadata into new DD.
     This is done after all the plugins are registered.
   */
+  // 处理myISAM表metadata的更新迁移到新的DD中
   if (!is_help_or_validate_option() && !opt_initialize &&
       !dd::upgrade_57::in_progress() &&
       dd::init(dd::enum_dd_init_type::DD_UPDATE_I_S_METADATA)) {
@@ -6147,6 +6254,9 @@ static int init_server_components() {
       Cost model is needed while dropping and creating pfs tables to
       update metadata of referencing views (if there are any).
     */
+    // 初始化pfs相关库表，更新metadata中相关views
+    // 启动一个线程执行 initialize_pfs 函数
+    // 创建database performance_schema 以及它包含的 tables
     init_optimizer_cost_module(true);
 
     bool st;
@@ -6173,6 +6283,7 @@ static int init_server_components() {
     if (opt_upgrade_mode == UPGRADE_MINIMAL)
       LogErr(WARNING_LEVEL, ER_SERVER_UPGRADE_SKIP);
     else {
+        // 创建线程调用upgrade_system_schemas，更新系统的schemas
       init_optimizer_cost_module(true);
       if (bootstrap::run_bootstrap_thread(nullptr, nullptr,
                                           &dd::upgrade::upgrade_system_schemas,
@@ -6181,6 +6292,7 @@ static int init_server_components() {
         unireg_abort(MYSQLD_ABORT_EXIT);
       }
       delete_optimizer_cost_module();
+      // 系统schemas变更后，我们需要重新创建non DD based system view
       recreate_non_dd_based_system_view = true;
 
       /*
@@ -6192,6 +6304,7 @@ static int init_server_components() {
               sequence and rewriting the way we create and upgrade server
               resources needed by plugins.
       */
+      // upgrade完成后，我们需要初始化之前被推迟初始化的插件。
       if (dd::upgrade::plugin_initialize_delayed_after_upgrade()) {
         unireg_abort(MYSQLD_ABORT_EXIT);
       }
@@ -6204,6 +6317,7 @@ static int init_server_components() {
     were recreated. c) If the database was upgraded. We do not update this
     in upgrade-minimal mode.
    */
+  // 重新创建non DD based system view
   if (!is_help_or_validate_option() && !opt_initialize &&
       opt_upgrade_mode != UPGRADE_MINIMAL &&
       recreate_non_dd_based_system_view) {
@@ -6216,6 +6330,8 @@ static int init_server_components() {
 
   auto res_grp_mgr = resourcegroups::Resource_group_mgr::instance();
   // Initialize the Resource group subsystem.
+  // 之前有初始化资源组子系统res_grp_mgr->init()，这里处理剩余的资源组初始化工作。
+  // 主要是创建临时线程去磁盘读取Resource groups并反序列化出来，更新并持久化到dd中
   if (!is_help_or_validate_option() && !opt_initialize) {
     if (res_grp_mgr->post_init()) {
       LogErr(ERROR_LEVEL, ER_RESOURCE_GROUP_POST_INIT_FAILED);
@@ -6232,6 +6348,8 @@ static int init_server_components() {
   strcpy(tmp_str, global_system_variables.track_sysvars_ptr);
   var_list.length = len;
   var_list.str = tmp_str;
+  // mysql词法分析MYSQL_LEX。https://www.cnblogs.com/bigshuai/articles/2363531.html
+  // check 给定的 track_sys_vars 是否有效
   if (session_track_system_variables_check.server_boot_verify(
           system_charset_info, var_list)) {
     LogErr(ERROR_LEVEL, ER_TRACK_VARIABLES_BOGUS);
@@ -6241,6 +6359,7 @@ static int init_server_components() {
   if (tmp_str) my_free(tmp_str);
 
   // Validate the configuration if --validate-config was specified.
+  // 校验configuration
   if (opt_validate_config && (remaining_argc > 1)) {
     bool saved_getopt_skip_unknown = my_getopt_skip_unknown;
     struct my_option no_opts[] = {{nullptr, 0, nullptr, nullptr, nullptr,
@@ -6258,18 +6377,21 @@ static int init_server_components() {
   if (is_help_or_validate_option()) unireg_abort(MYSQLD_SUCCESS_EXIT);
 
   /* if the errmsg.sys is not loaded, terminate to maintain behaviour */
+  // 检查errmsg.sys是否加载
   if (!my_default_lc_messages->errmsgs->is_loaded()) {
     LogErr(ERROR_LEVEL, ER_CANT_READ_ERRMSGS);
     unireg_abort(MYSQLD_ABORT_EXIT);
   }
 
   /* We have to initialize the storage engines before CSV logging */
+  // 检查是否有事务处理能力？
   if (ha_init()) {
     LogErr(ERROR_LEVEL, ER_CANT_INIT_DBS);
     unireg_abort(MYSQLD_ABORT_EXIT);
   }
 
   /* Initialize ndbinfo tables in DD */
+  // 在DD中 初始化NDB info 表
   if (dd::ndbinfo::init_schema_and_tables(opt_upgrade_mode)) {
     LogErr(ERROR_LEVEL, ER_NDBINFO_UPGRADING_SCHEMA_FAIL);
     unireg_abort(1);
@@ -6287,20 +6409,24 @@ static int init_server_components() {
   if (log_output_options & LOG_TABLE) {
     /* Fall back to log files if the csv engine is not loaded. */
     LEX_CSTRING csv_name = {STRING_WITH_LEN("csv")};
+    // 检查csv存储引擎是否加载
     if (!plugin_is_ready(csv_name, MYSQL_STORAGE_ENGINE_PLUGIN)) {
       LogErr(ERROR_LEVEL, ER_NO_CSV_NO_LOG_TABLES);
       log_output_options = (log_output_options & ~LOG_TABLE) | LOG_FILE;
     }
   }
 
+  // 初始化查询日志处理器，基于option选择不同的handler
   query_logger.set_handlers(log_output_options);
 
   // Open slow log file if enabled.
+  // 设置慢查询日志文件，并打开
   query_logger.set_log_file(QUERY_LOG_SLOW);
   if (opt_slow_log && query_logger.reopen_log_file(QUERY_LOG_SLOW))
     opt_slow_log = false;
 
   // Open general log file if enabled.
+  // 设置普通查询日志文件，并打开
   query_logger.set_log_file(QUERY_LOG_GENERAL);
   if (opt_general_log && query_logger.reopen_log_file(QUERY_LOG_GENERAL))
     opt_general_log = false;
@@ -6310,6 +6436,7 @@ static int init_server_components() {
     does not exist. It should be initialized before opening binlog file. Because
     server's uuid will be stored into the new binlog file.
   */
+  // 初始化auto.cnf中的options，不过目前里面只有server_uuid选项了，所以这里就只是生成服务的uuid。
   if (init_server_auto_options()) {
     LogErr(ERROR_LEVEL, ER_CANT_CREATE_UUID);
     unireg_abort(MYSQLD_ABORT_EXIT);
@@ -6318,24 +6445,29 @@ static int init_server_components() {
   /*
     Set the default storage engines
   */
+  // 初始化默认存储引擎，default_storage_engine="INNODB"
   if (initialize_storage_engine(default_storage_engine, "",
                                 &global_system_variables.table_plugin))
     unireg_abort(MYSQLD_ABORT_EXIT);
+  // 初始化临时表的默认存储引擎，也是innodb
   if (initialize_storage_engine(default_tmp_storage_engine, " temp",
                                 &global_system_variables.temp_table_plugin))
     unireg_abort(MYSQLD_ABORT_EXIT);
 
   if (!opt_initialize && !opt_noacl) {
+      // 设置不准使用的存储引擎
     set_externally_disabled_storage_engine_names(opt_disabled_storage_engines);
 
     // Log warning if default_storage_engine is a disabled storage engine.
     handlerton *default_se_handle =
         plugin_data<handlerton *>(global_system_variables.table_plugin);
+    // 检查是否默认存储引擎在禁用列表中
     if (ha_is_storage_engine_disabled(default_se_handle))
       LogErr(WARNING_LEVEL, ER_DISABLED_STORAGE_ENGINE_AS_DEFAULT,
              "default_storage_engine", default_storage_engine);
 
     // Log warning if default_tmp_storage_engine is a disabled storage engine.
+    // 检查是否默认临时存储引擎在禁用列表中
     handlerton *default_tmp_se_handle =
         plugin_data<handlerton *>(global_system_variables.temp_table_plugin);
     if (ha_is_storage_engine_disabled(default_tmp_se_handle))
@@ -6343,6 +6475,7 @@ static int init_server_components() {
              "default_tmp_storage_engine", default_tmp_storage_engine);
   }
 
+  // 重新设置事务两阶段提交tc_log
   if (total_ha_2pc > 1 || (1 == total_ha_2pc && opt_bin_log)) {
     if (opt_bin_log)
       tc_log = &mysql_bin_log;
@@ -6350,23 +6483,30 @@ static int init_server_components() {
       tc_log = &tc_log_mmap;
   }
 
+  // 恢复事务系统的初始化，主要用于事务执行时重启等操作后的恢复。
   if (Recovered_xa_transactions::init()) {
     LogErr(ERROR_LEVEL, ER_OOM);
     unireg_abort(MYSQLD_ABORT_EXIT);
   }
 
+  // 打开tc_log
   if (tc_log->open(opt_bin_log ? opt_bin_logname : opt_tc_log_file)) {
     LogErr(ERROR_LEVEL, ER_CANT_INIT_TC_LOG);
     unireg_abort(MYSQLD_ABORT_EXIT);
   }
+  // 执行recovery操作之前需要做一些操作。
+  // 调用 server_state_delegate.before_recovery(nullptr) 处理
   (void)RUN_HOOK(server_state, before_recovery, (nullptr));
   if (ha_recover(nullptr)) {
     unireg_abort(MYSQLD_ABORT_EXIT);
   }
 
+  // 重置表及表空间
   if (dd::reset_tables_and_tablespaces()) {
     unireg_abort(MYSQLD_ABORT_EXIT);
   }
+  // 恢复后的处理，各个引擎有自己的处理函数。
+  // innodb的是 innobase_post_recover
   ha_post_recover();
 
   /*
@@ -6376,17 +6516,20 @@ static int init_server_components() {
     possible suspending on acquiring EXLUSIVE mdl lock on tables inside the
     function dd::reset_tables_and_tablespaces() when table cache being reset.
   */
+  // 恢复之前已经prepared的事务
   if (Recovered_xa_transactions::instance()
           .recover_prepared_xa_transactions()) {
     unireg_abort(MYSQLD_ABORT_EXIT);
   }
 
+  // 检查gtid一致性模式
   if (global_gtid_mode.get() == Gtid_mode::ON &&
       _gtid_consistency_mode != GTID_CONSISTENCY_MODE_ON) {
     LogErr(ERROR_LEVEL, ER_RPL_GTID_MODE_REQUIRES_ENFORCE_GTID_CONSISTENCY_ON);
     unireg_abort(MYSQLD_ABORT_EXIT);
   }
 
+  // 复制加密初始化，尝试恢复或者重新生成replication master key
   if (rpl_encryption.initialize()) {
     LogErr(ERROR_LEVEL, ER_SERVER_RPL_ENCRYPTION_UNABLE_TO_INITIALIZE);
     unireg_abort(MYSQLD_ABORT_EXIT);
@@ -6398,10 +6541,12 @@ static int init_server_components() {
       gtid(s). This is necessary in the MYSQL_BIN_LOG::MYSQL_BIN_LOG to
       corretly compute the set of previous gtids.
     */
+    // 需要配置哪里存放处理过的gtids，从而bin_log能正确计算出之前处理的gtids
     assert(!mysql_bin_log.is_relay_log);
     mysql_mutex_t *log_lock = mysql_bin_log.get_log_lock();
     mysql_mutex_lock(log_lock);
 
+    // 打开binlog
     if (mysql_bin_log.open_binlog(opt_bin_logname, nullptr, max_binlog_size,
                                   false, true /*need_lock_index=true*/,
                                   true /*need_sid_lock=true*/, nullptr)) {
@@ -6417,6 +6562,8 @@ static int init_server_components() {
     expire_logs_days will be ignored and only binlog_expire_logs_seconds
     will be used.
   */
+  // 同时配置expire_logs_days，binlog_expire_logs_seconds且值有效时，只会使用binlog_expire_logs_seconds
+  // 设置清除日志时间
   if (binlog_expire_logs_seconds_supplied && expire_logs_days_supplied) {
     if (binlog_expire_logs_seconds != 0 && expire_logs_days != 0) {
       LogErr(WARNING_LEVEL, ER_EXPIRE_LOGS_DAYS_IGNORED);
@@ -6433,8 +6580,10 @@ static int init_server_components() {
       LogErr(WARNING_LEVEL, ER_NEED_LOG_BIN, "--expire_logs_days");
   }
 
+  // 如果启用myisam_log，则创建对应的日志文件
   if (opt_myisam_log) (void)mi_log(1);
 
+  // 是否禁止内存交换，见mlock族函数
 #if defined(HAVE_MLOCKALL) && defined(MCL_CURRENT)
   if (locked_in_memory && !getuid()) {
     if (setreuid((uid_t)-1, 0) == -1) {  // this should never happen
@@ -6447,18 +6596,23 @@ static int init_server_components() {
       locked_in_memory = false;
     }
 #ifndef _WIN32
+    // 校验用户信息
     if (!user_info.IsVoid()) set_user(mysqld_user, user_info);
 #endif
   } else
 #endif
     locked_in_memory = false;
 
+  // 注册异步连接故障转移的UDFs，初始化相关hook函数
   udf_load_service.init();
 
   /* Initialize the optimizer cost module */
+  // 初始化优化器的时间花费模型
   init_optimizer_cost_module(true);
+  // 初始化全文索引停用词，使用红黑树进行存储查询
   ft_init_stopwords();
 
+  // 初始化hash_user_connections
   init_max_user_conn();
 
   return 0;
@@ -6627,22 +6781,29 @@ int mysqld_main(int argc, char **argv)
 #endif
 {
   // Substitute the full path to the executable in argv[0]
+  // 将程序名替换为绝对路径名
   substitute_progpath(argv);
+  // 读出环境变量NOTIFY_SOCKET，并对它建立socket连接
   sysd::notify_connect();
+  // 通过notify socket输出日志
   sysd::notify("STATUS=Server startup in progress\n");
 
   /*
     Perform basic thread library and malloc initialization,
     to be able to read defaults files and parse options.
   */
+  // 程序名，已替换为绝对路径
   my_progname = argv[0];
+  // 计算mysql主目录，先从环境变量找，没有就从程序名计算
   calculate_mysql_home_from_my_progname();
 
 #ifndef _WIN32
 #ifdef WITH_PERFSCHEMA_STORAGE_ENGINE
+  // 预先初始化性能监控模式
   pre_initialize_performance_schema();
 #endif /*WITH_PERFSCHEMA_STORAGE_ENGINE */
   // For windows, my_init() is called from the win specific mysqld_main
+  // 初始化my_sys相关函数、资源及变量
   if (my_init())  // init my_sys library & pthreads
   {
     LogErr(ERROR_LEVEL, ER_MYINIT_FAILED);
@@ -6655,6 +6816,7 @@ int mysqld_main(int argc, char **argv)
   orig_argv = argv;
   my_getopt_use_args_separator = true;
   my_defaults_read_login_file = false;
+  // 加载配置文件的option置于命令行参数之前，以便命令行参数覆盖默认配置参数。
   if (load_defaults(MYSQL_CONFIG_NAME, load_default_groups, &argc, &argv,
                     &argv_alloc)) {
     flush_error_log_messages();
@@ -6662,6 +6824,7 @@ int mysqld_main(int argc, char **argv)
   }
 
   /* Set data dir directory paths */
+  // 设置放置数据的目录，基于mysql主目录的相对路径
   strmake(mysql_real_data_home, get_relative_path(MYSQL_DATADIR),
           sizeof(mysql_real_data_home) - 1);
 
@@ -6670,6 +6833,7 @@ int mysqld_main(int argc, char **argv)
    config file and append read only persisted variables to command line
    options if present.
   */
+  // 处理持久化的配置参数，读取参数放置到命令行参数后面
   if (persisted_variables_cache.init(&argc, &argv) ||
       persisted_variables_cache.load_persist_file() ||
       persisted_variables_cache.append_read_only_variables(&argc, &argv)) {
@@ -6680,9 +6844,11 @@ int mysqld_main(int argc, char **argv)
   remaining_argc = argc;
   remaining_argv = argv;
 
+  // 初始化各种配置的默认路径，全局配置、持久化配置、命令行配置、登陆配置等构建一个默认路径map
   init_variable_default_paths();
 
   /* Must be initialized early for comparison of options name */
+  // 尽早初始化系统的字符编码，便于对option名字进行对比
   system_charset_info = &my_charset_utf8_general_ci;
 
   /* Write mysys error messages to the error log. */
@@ -6694,30 +6860,40 @@ int mysqld_main(int argc, char **argv)
   /*
     Initialize the array of performance schema instrument configurations.
   */
+  // 初始化性能监控的指令配置元数据数组
   init_pfs_instrument_array();
 #endif /* WITH_PERFSCHEMA_STORAGE_ENGINE */
 
+  // 处理命令行参数early标识的参数。有的组件需要尽可能早的初始化，因为后面的初始化需要用到这些组件。
+  // 如性能监控组件、与help、bootstrap相关的组件等。
   heo_error = handle_early_options();
 
+  // 初始化sql_statement_names数组，数组存放在MYSQL_LEX_CSTRING对象，
+  // 对象的 str 为 name，length 为 name长度
   init_sql_statement_names();
+  // 初始化系统变量option（handle_early_options前面有处理过）
   sys_var_init();
   ulong requested_open_files = 0;
 
   //  Init error log subsystem. This does not actually open the log yet.
   if (init_error_log()) unireg_abort(MYSQLD_ABORT_EXIT);
+  // 调整相关选项，设置打开文件数、连接数、表缓存大小、表定义大小限制。
   if (!opt_validate_config) adjust_related_options(&requested_open_files);
 
 #ifdef WITH_PERFSCHEMA_STORAGE_ENGINE
   if (heo_error == 0) {
+      // 非help、validate、initialize选项时，不会真的初始化很多程序步骤
     if (!is_help_or_validate_option() && !opt_initialize) {
       int pfs_rc;
       /* Add sizing hints from the server sizing parameters. */
+      // 初始化pfs_param的m_hints，主要是前面的一些size限制
       pfs_param.m_hints.m_table_definition_cache = table_def_size;
       pfs_param.m_hints.m_table_open_cache = table_cache_size;
       pfs_param.m_hints.m_max_connections = max_connections;
       pfs_param.m_hints.m_open_files_limit = requested_open_files;
       pfs_param.m_hints.m_max_prepared_stmt_count = max_prepared_stmt_count;
 
+      // 初始化performance_schema，很多buffer、参数初始化，不知道干嘛的，先不看。
       pfs_rc = initialize_performance_schema(
           &pfs_param, &psi_thread_hook, &psi_mutex_hook, &psi_rwlock_hook,
           &psi_cond_hook, &psi_file_hook, &psi_socket_hook, &psi_table_hook,
@@ -6763,6 +6939,7 @@ int mysqld_main(int argc, char **argv)
     Obtain the current performance schema instrumentation interface,
     if available.
   */
+  // 有psi接口，就获取并set到对于service
 
   void *service;
 
@@ -6892,6 +7069,7 @@ int mysqld_main(int argc, char **argv)
     the performance schema itself, the next step is to register all the
     server instruments.
   */
+  // 注册所有服务指令到performance schema
   init_server_psi_keys();
 
   /*
@@ -6899,6 +7077,7 @@ int mysqld_main(int argc, char **argv)
     recreate objects which were initialised early,
     so that they are instrumented as well.
   */
+  // 由于现在性能监控已就位，早前初始化的thread参数要重新初始化，以便性能监控能感知到。
   my_thread_global_reinit();
 #endif /* HAVE_PSI_INTERFACE */
 
@@ -6907,6 +7086,7 @@ int mysqld_main(int argc, char **argv)
     uses. This part doesn't use any more MySQL-specific functionalities but
     error logging and PFS.
   */
+  // 基础核心组件的初始化
   if (component_infrastructure_init()) unireg_abort(MYSQLD_ABORT_EXIT);
 
     /*
@@ -6914,6 +7094,7 @@ int mysqld_main(int argc, char **argv)
     */
 #ifdef HAVE_PSI_THREAD_INTERFACE
   if (!is_help_or_validate_option() && !opt_initialize) {
+      // 注册Performance Schema组件service
     register_pfs_notification_service();
     register_pfs_resource_group_service();
   }
@@ -6922,6 +7103,7 @@ int mysqld_main(int argc, char **argv)
   // Initialize the resource group subsystem.
   auto res_grp_mgr = resourcegroups::Resource_group_mgr::instance();
   if (!is_help_or_validate_option() && !opt_initialize) {
+      // 资源组子系统初始化
     if (res_grp_mgr->init()) {
       LogErr(ERROR_LEVEL, ER_RESOURCE_GROUP_SUBSYSTEM_INIT_FAILED);
       unireg_abort(MYSQLD_ABORT_EXIT);
@@ -6930,20 +7112,26 @@ int mysqld_main(int argc, char **argv)
 
 #ifdef HAVE_PSI_THREAD_INTERFACE
   /* Instrument the main thread */
+  // 创建主线程
   PSI_thread *psi = PSI_THREAD_CALL(new_thread)(key_thread_main, nullptr, 0);
+  // 调用pfs_set_thread_os_id_vc 获取psi的线程id
   PSI_THREAD_CALL(set_thread_os_id)(psi);
+  // 调用pfs_set_thread_vc 将psi线程转成pfs线程，并赋值给THR_PFS
   PSI_THREAD_CALL(set_thread)(psi);
 #endif /* HAVE_PSI_THREAD_INTERFACE */
 
   /* Initialize audit interface globals. Audit plugins are inited later. */
+  // 审计相关初始化，锁及全局变量mysql_global_audit_mask
   mysql_audit_initialize();
 
+  // module初始化，主要初始化server_session_list、server_session_threads两个map
   Srv_session::module_init();
 
   /*
     Perform basic query log initialization. Should be called after
     MY_INIT, as it initializes mutexes.
   */
+  // 初始化查询日志处理器
   query_logger.init();
 
   if (heo_error) {
@@ -6964,6 +7152,7 @@ int mysqld_main(int argc, char **argv)
     exit(MYSQLD_ABORT_EXIT);
   }
 
+  // 初始化公共变量
   if (init_common_variables()) {
     setup_error_log();
     unireg_abort(MYSQLD_ABORT_EXIT);  // Will do exit
@@ -6971,8 +7160,10 @@ int mysqld_main(int argc, char **argv)
 
   keyring_lockable_init();
 
+  // 初始化系统信号处理handler
   my_init_signals();
 
+  // 处理线程栈大小设置
   size_t guardize = 0;
 #ifndef _WIN32
   int retval = pthread_attr_getguardsize(&connection_attrib, &guardize);
@@ -6995,6 +7186,7 @@ int mysqld_main(int argc, char **argv)
 
   {
     /* Retrieve used stack size;  Needed for checking stack overflows */
+    // 取回使用的stack size，进行检查设置
     size_t stack_size = 0;
     my_thread_attr_getstacksize(&connection_attrib, &stack_size);
 
@@ -7036,6 +7228,7 @@ int mysqld_main(int argc, char **argv)
 
     if ((pipe_write_fd = mysqld::runtime::mysqld_daemonize()) < -1) {
       LogErr(ERROR_LEVEL, ER_FAILED_START_MYSQLD_DAEMON);
+      // 返回-2是发生异常，需要带状态码调用unireg_abort
       unireg_abort(MYSQLD_ABORT_EXIT);
     }
 
@@ -7043,17 +7236,21 @@ int mysqld_main(int argc, char **argv)
       // This is the launching process and the daemon appears to have
       // started ok (Need to call unireg_abort with success here to
       // clean up resources in the lauching process.
+      // 返回-1是启动进程，并且暗示daemon启动ok。
+      // 原始进程会一致等待daemon发送消息到管道中。
       unireg_abort(MYSQLD_SUCCESS_EXIT);
     }
 
     // Need to update the value of current_pid so that it reflects the
     // pid of the daemon (the previous value was set by unireg_init()
     // while still in the launcher process.
+    // 返回的进程是原进程的孙子进程，为daemon进程，所以需要重新获取pid
     current_pid = static_cast<ulong>(getpid());
   }
 #endif
 
 #ifndef _WIN32
+  // 启动时指定了--user参数时，会以该用户启动。并处理数据目录的拥有关系
   user_info = check_user(mysqld_user);
   if (!user_info.IsVoid()) {
 #if HAVE_CHOWN
@@ -7073,6 +7270,7 @@ int mysqld_main(int argc, char **argv)
                stat.st_gid == user_info.pw_gid)
         must_chown = false;
 
+      // chown修改文件拥有关系。https://blog.csdn.net/tototuzuoquan/article/details/39270035
       if (must_chown &&
           chown(mysql_real_data_home, user_info.pw_uid, user_info.pw_gid)) {
         LogErr(ERROR_LEVEL, ER_CANT_CHOWN_DATADIR, mysqld_user);
@@ -7081,6 +7279,7 @@ int mysqld_main(int argc, char **argv)
     }
 #endif
 
+// 设置有效的用户？
 #if defined(HAVE_MLOCKALL) && defined(MCL_CURRENT)
     if (locked_in_memory)  // getuid() == 0 here
       set_effective_user(user_info);
@@ -7094,12 +7293,14 @@ int mysqld_main(int argc, char **argv)
    initiate key migration if any one of the migration specific
    options are provided.
   */
+  // 如果有提供数据迁移migration相关选项，处理key migration。
   if (opt_keyring_migration_source || opt_keyring_migration_destination ||
       migrate_connect_options) {
     int exit_state = MYSQLD_ABORT_EXIT;
     while (true) {
       Migrate_keyring mk;
       my_getopt_skip_unknown = true;
+        // 初始化mk
       if (mk.init(remaining_argc, remaining_argv, opt_keyring_migration_source,
                   opt_keyring_migration_destination, opt_keyring_migration_user,
                   opt_keyring_migration_host, opt_keyring_migration_password,
@@ -7111,6 +7312,7 @@ int mysqld_main(int argc, char **argv)
         break;
       }
 
+        // 执行mk迁移操作
       if (mk.execute()) {
         LogErr(ERROR_LEVEL, ER_KEYRING_MIGRATION_FAILED);
         log_error_dest = "stderr";
@@ -7131,6 +7333,7 @@ int mysqld_main(int argc, char **argv)
   /*
    We have enough space for fiddling with the argv, continue
   */
+  // 设置新的工作目录，转到数据目录，后面要执行数据加载了
   if (!(is_help_or_validate_option()) &&
       my_setwd(mysql_real_data_home, MYF(0))) {
     char errbuf[MYSYS_STRERROR_SIZE];
@@ -7166,8 +7369,10 @@ int mysqld_main(int argc, char **argv)
 #endif
 
   /* Determine default TCP port and unix socket name */
+  // 设置服务端口
   set_ports();
 
+  // 初始化服务组件
   if (init_server_components()) unireg_abort(MYSQLD_ABORT_EXIT);
 
   if (!server_id_supplied)
@@ -7187,6 +7392,8 @@ int mysqld_main(int argc, char **argv)
     regardless to avoid possible future bugs if gtid_state ever
     needs to do anything else.
   */
+  // 将server_uuid加入到binlog的Sid_map中。
+  // 需要在server_uuid初始化（init_server_components中的auto_options）之后执行，所以不能在构造函数执行。
   global_sid_lock->wrlock();
   int gtid_ret = gtid_state->init();
   global_sid_lock->unlock();
@@ -7195,6 +7402,7 @@ int mysqld_main(int argc, char **argv)
 
   if (!opt_initialize && !opt_initialize_insecure) {
     // Initialize executed_gtids from mysql.gtid_executed table.
+    // 初始化executed_gtids，从mysql.gtid_executed表中获取，这里可以看到读系统表的整体流程。
     if (gtid_state->read_gtid_executed_from_table() == -1) unireg_abort(1);
   }
 
@@ -8017,17 +8225,21 @@ static int handle_early_options() {
   my_getopt_skip_unknown = true;
 
   /* Add the system variables parsed early */
+  // 先将系统变量加入
   sys_var_add_options(&all_early_options, sys_var::PARSE_EARLY);
 
   /* Add the command line options parsed early */
+  // 紧接着将普通的early命令行参数加入
   for (my_option *opt = my_long_early_options; opt->name != nullptr; opt++)
     all_early_options.push_back(*opt);
 
+  // 加如结束空元素
   add_terminator(&all_early_options);
 
   my_getopt_error_reporter = option_error_reporter;
   my_charset_error_reporter = charset_error_reporter;
 
+  // 处理options
   ho_error = handle_options(&remaining_argc, &remaining_argv,
                             &all_early_options[0], mysqld_get_one_option);
   if (ho_error == 0) {
@@ -8039,6 +8251,7 @@ static int handle_early_options() {
   }
 
   // Swap with an empty vector, i.e. delete elements and free allocated space.
+  // 删除all_early_options，释放内存
   vector<my_option>().swap(all_early_options);
 
   return ho_error;
@@ -10307,6 +10520,8 @@ static int get_options(int *argc_ptr, char ***argv_ptr) {
     Do them here.
   */
 
+  // 前面各种选项参数解析完了，后面需要做一些基于参数的操作。
+  // 如：自定义值的检查、各选项兼容性检查，多值的设置等。
   if (!opt_help && opt_verbose) LogErr(ERROR_LEVEL, ER_VERBOSE_REQUIRES_HELP);
 
   if ((opt_log_slow_admin_statements || opt_log_queries_not_using_indexes ||
@@ -10403,16 +10618,21 @@ static int get_options(int *argc_ptr, char ***argv_ptr) {
 
   if (opt_short_log_format) opt_specialflag |= SPECIAL_SHORT_LOG_FORMAT;
 
+  // Connection_handler管理器初始化，大多数时候是分配新的connection给当前活跃的Connection_handler
+  // https://blog.csdn.net/qq_28840229/article/details/79708319
+  // https://www.cnblogs.com/nocode/archive/2011/08/21/2147781.html
   if (Connection_handler_manager::init()) {
     LogErr(ERROR_LEVEL, ER_CONNECTION_HANDLING_OOM);
     return 1;
   }
+  // 创建全局线程管理器，只会由主线程使用。主要提供接口管理所有注册的线程
   if (Global_THD_manager::create_instance()) {
     LogErr(ERROR_LEVEL, ER_THREAD_HANDLING_OOM);
     return 1;
   }
 
   /* If --super-read-only was specified, set read_only to 1 */
+  // read_only设置，一般从库才指定
   read_only = super_read_only ? super_read_only : read_only;
   opt_readonly = read_only;
 

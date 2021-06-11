@@ -113,12 +113,16 @@ int my_timer_initialize(void) {
   int rc;
 
   /* Create a file descriptor for event notification. */
+  // 创建kqueue，用于io多路复用。主要处理时间过期的事件。
+  // https://www.cnblogs.com/luminocean/archive/2016/06/30/5631336.html
+  // https://www.zhihu.com/question/20122137
   if ((kq_fd = kqueue()) < 0) {
     my_message_local(ERROR_LEVEL, EE_FAILED_TO_CREATE_TIMER_QUEUE, errno);
     return -1;
   }
 
   /* Create a helper thread. */
+  // 创建一个helper线程，用于分发timer过期的事件
   if ((rc = start_helper_thread())) {
     my_message_local(ERROR_LEVEL, EE_FAILED_TO_START_TIMER_NOTIFY_THREAD);
     close(kq_fd);

@@ -792,6 +792,7 @@ bool lock_tablespace_names(THD *thd, Tablespace_hash_set *tablespace_set,
 
   // Prepare MDL_request's for all tablespace names.
   MDL_request_list mdl_tablespace_requests;
+  // 遍历tablespace_set，构建对应的MDL request
   for (const std::string &tablespace : *tablespace_set) {
     assert(!tablespace.empty());
 
@@ -804,6 +805,7 @@ bool lock_tablespace_names(THD *thd, Tablespace_hash_set *tablespace_set,
   }
 
   // Finally, acquire IX MDL locks.
+  // 同时对所有的tablespace names获取IX MDL locks
   if (thd->mdl_context.acquire_locks(&mdl_tablespace_requests,
                                      lock_wait_timeout))
     return true;

@@ -1293,6 +1293,7 @@ static int plugin_initialize(st_plugin_int *plugin) {
 
     /* FIXME: Need better solution to transfer the callback function
     array to memcached */
+    // 已经初始化了，直接设置回调函数？
     if (strcmp(plugin->name.str, "InnoDB") == 0) {
       innodb_callback_data = ((handlerton *)plugin->data)->data;
     }
@@ -1301,6 +1302,7 @@ static int plugin_initialize(st_plugin_int *plugin) {
       plugin->data = innodb_callback_data;
     }
 
+    // 初始化
     if (plugin->plugin->init(plugin)) {
       LogErr(ERROR_LEVEL, ER_PLUGIN_INIT_FAILED, plugin->name.str);
       goto err;
@@ -1529,6 +1531,7 @@ bool plugin_register_builtin_and_init_core_se(int *argc, char **argv) {
   initialized = true;
 
   /* First we register the builtin mandatory and optional plugins */
+  // 首先注册内置的强制的和可选的插件
   for (struct st_mysql_plugin **builtins = mysql_mandatory_plugins;
        *builtins || mandatory; builtins++) {
     /* Switch to optional plugins when done with the mandatory ones */
@@ -1573,6 +1576,7 @@ bool plugin_register_builtin_and_init_core_se(int *argc, char **argv) {
         tmp.state = PLUGIN_IS_UNINITIALIZED;
 
       struct st_plugin_int *plugin_ptr;  // Pointer to registered plugin
+      // 注册内置插件
       if (register_builtin(plugin, &tmp, &plugin_ptr)) goto err_unlock;
 
       /*
@@ -1588,11 +1592,13 @@ bool plugin_register_builtin_and_init_core_se(int *argc, char **argv) {
           !my_strcasecmp(&my_charset_latin1, plugin->name, "MyISAM");
       bool is_innodb =
           !my_strcasecmp(&my_charset_latin1, plugin->name, "InnoDB");
+      // 如果插件不是这三者，后面就不执行了。即只有这三者才会进行初始化。
       if ((!is_daemon_keyring_proxy || is_help_or_validate_option()) &&
           !is_myisam && (!is_innodb || is_help_or_validate_option()) &&
           my_strcasecmp(&my_charset_latin1, plugin->name, "CSV"))
         continue;
 
+      // 初始化插件
       if (plugin_ptr->state != PLUGIN_IS_UNINITIALIZED ||
           plugin_initialize(plugin_ptr))
         goto err_unlock;
@@ -1601,6 +1607,7 @@ bool plugin_register_builtin_and_init_core_se(int *argc, char **argv) {
         Initialize the global default storage engine so that it may
         not be null in any child thread.
       */
+      // 初始化全局默认存储引擎
       if (is_myisam) {
         assert(!global_system_variables.table_plugin);
         assert(!global_system_variables.temp_table_plugin);

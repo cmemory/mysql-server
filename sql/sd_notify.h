@@ -53,6 +53,7 @@ class NotifyGlobals {
   @param t current argument to format
   @param ts remaining args parameter pack for recursive call
 */
+// 递归的将传入内容输入到 NotifyGlobals::fmt
 template <typename T, typename... Ts>
 inline void notify(T t, Ts... ts) {
 #ifndef _WIN32
@@ -62,6 +63,7 @@ inline void notify(T t, Ts... ts) {
   }
 #endif /* WITH_SYSTEMD_DEBUG */
   NotifyGlobals::fmt << t;
+  // 递归调用当前函数
   notify(ts...);
 #endif /* not defined _WIN32 */
 }

@@ -1715,6 +1715,7 @@ struct dict_table_t {
   dict_index_t *fts_doc_id_index;
 
   /** List of indexes of the table. */
+//  ut_list_base<dict_index_t, ut_list_node<dict_index_t> dict_index_t::*> indexes
   UT_LIST_BASE_NODE_T(dict_index_t) indexes;
 
   /** List of foreign key constraints in the table. These refer to

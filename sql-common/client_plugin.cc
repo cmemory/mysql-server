@@ -344,6 +344,7 @@ int mysql_client_plugin_init() {
 
   mysql_mutex_unlock(&LOCK_load_client_plugin);
 
+  // 加载环境变量中指定的插件
   load_env_plugins(&mysql);
 
   mysql_close_free(&mysql);
